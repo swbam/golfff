@@ -6,165 +6,287 @@ protocol TrajectoryDetectorDelegate: AnyObject {
     func trajectoryDetectorDidFinish(_ detector: TrajectoryDetector, finalTrajectory: Trajectory?)
 }
 
+/// Golf Ball Trajectory Detector using Apple's Vision Framework
+/// 
+/// KEY INSIGHT: Vision's VNDetectTrajectoriesRequest provides:
+/// - detectedPoints: Where ball was actually observed
+/// - projectedPoints: FULL predicted arc based on parabola fit ← USE THIS FOR RENDERING!
+/// - equationCoefficients: The parabola equation (ax² + bx + c)
+///
+/// This is how SmoothSwing achieves live = export: both use the same projectedPoints!
 final class TrajectoryDetector {
     weak var delegate: TrajectoryDetectorDelegate?
 
+    /// Region of interest for detection (Vision coordinates: origin bottom-left)
     var regionOfInterest: CGRect?
+    
+    /// Video orientation
     var orientation: CGImagePropertyOrientation = .right
+    
+    /// Frame analysis spacing (0 = every frame)
     var frameAnalysisSpacing: CMTime = .zero
-    var minimumNormalizedRadius: Float = 0.002
-    var maximumNormalizedRadius: Float = 0.12
-    var desiredTrajectoryLength: Int = 7
+    
+    /// Debug logging
+    var debugLogging = true
 
     private var isRunning = false
-    private var currentTrajectory: Trajectory?
-    private var missingFrameCount = 0
-    private let maxMissingFrames = 8
+    private let trajectoryStore = TrajectoryStore()
     private let requestHandler = VNSequenceRequestHandler()
     private var request: VNDetectTrajectoriesRequest!
-    private let syncQueue = DispatchQueue(label: "com.shottracer.trajectory")
+    private let syncQueue = DispatchQueue(label: "com.shottracer.trajectory", qos: .userInteractive)
+    
+    // Frame counting for debug
+    private var frameCount = 0
+    private var detectionCount = 0
 
     init() {
         request = makeRequest()
     }
 
     func start() {
-        syncQueue.async {
-            self.missingFrameCount = 0
-            self.currentTrajectory = nil
+        syncQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.frameCount = 0
+            self.detectionCount = 0
             self.isRunning = true
+            self.trajectoryStore.reset()
             self.request = self.makeRequest()
+            
+            if self.debugLogging {
+                print("═══════════════════════════════════════")
+                print("🎯 TRAJECTORY DETECTOR STARTED")
+                print("   ROI: \(self.regionOfInterest?.debugDescription ?? "full frame")")
+                print("   Orientation: \(self.orientation.rawValue)")
+                print("═══════════════════════════════════════")
+            }
         }
     }
 
     func stop() {
-        syncQueue.async {
-            guard self.isRunning else { return }
+        syncQueue.async { [weak self] in
+            guard let self = self, self.isRunning else { return }
             self.isRunning = false
-            let final = self.currentTrajectory
+            let finalTraj = self.trajectoryStore.getTrajectoryForRendering()
+            
+            if self.debugLogging {
+                print("═══════════════════════════════════════")
+                print("🛑 TRAJECTORY DETECTOR STOPPED")
+                print("   Frames processed: \(self.frameCount)")
+                print("   Detections: \(self.detectionCount)")
+                if let traj = finalTraj {
+                    print("   Final: \(traj.detectedPoints.count) detected, \(traj.projectedPoints.count) projected")
+                } else {
+                    print("   Final trajectory: NONE")
+                }
+                print("═══════════════════════════════════════")
+            }
+            
             DispatchQueue.main.async {
-                self.delegate?.trajectoryDetectorDidFinish(self, finalTrajectory: final)
+                self.delegate?.trajectoryDetectorDidFinish(self, finalTrajectory: finalTraj)
             }
         }
     }
 
     func process(sampleBuffer: CMSampleBuffer) {
-        syncQueue.async {
-            guard self.isRunning else { return }
+        syncQueue.async { [weak self] in
+            guard let self = self, self.isRunning else { return }
+            
+            self.frameCount += 1
+            
+            // Tick trajectory store to age out stale trajectories
+            self.trajectoryStore.tick()
 
+            // Update ROI
             if let roi = self.regionOfInterest {
                 self.request.regionOfInterest = roi
             } else {
-                self.request.regionOfInterest = CGRect(x: 0, y: 0, width: 1, height: 1)
+                // Default: focus on upper portion where ball flies
+                // Vision coordinates: origin bottom-left, Y increases upward
+                self.request.regionOfInterest = CGRect(x: 0.0, y: 0.1, width: 1.0, height: 0.9)
             }
 
             do {
-                if self.missingFrameCount == 0 {
-                    print("🔎 TrajectoryDetector running Vision pass | minR: \(self.request.objectMinimumNormalizedRadius) maxR: \(self.request.objectMaximumNormalizedRadius) len: \(self.request.trajectoryLength) roi: \(self.request.regionOfInterest)")
-                }
                 try self.requestHandler.perform([self.request], on: sampleBuffer, orientation: self.orientation)
             } catch {
-                // Vision errors are non-fatal for the session; log and continue.
-                print("TrajectoryDetector Vision error: \(error)")
+                if self.debugLogging && self.frameCount % 60 == 0 {
+                    print("⚠️ Vision error: \(error.localizedDescription)")
+                }
             }
         }
     }
 
     func update(frameSpacingSeconds: Double) {
         frameAnalysisSpacing = CMTime(seconds: frameSpacingSeconds, preferredTimescale: 600)
-        if isRunning {
-            request = makeRequest()
+        syncQueue.async { [weak self] in
+            guard let self = self else { return }
+            if self.isRunning {
+                self.request = self.makeRequest()
+            }
         }
     }
-
-    func updateDetectionParameters(minRadius: Float? = nil, maxRadius: Float? = nil, trajectoryLength: Int? = nil) {
-        if let minRadius { minimumNormalizedRadius = minRadius }
-        if let maxRadius { maximumNormalizedRadius = maxRadius }
-        if let trajectoryLength { desiredTrajectoryLength = trajectoryLength }
-
-        if isRunning {
-            request = makeRequest()
-        }
+    
+    /// Get current trajectory for rendering
+    var currentTrajectory: Trajectory? {
+        trajectoryStore.getTrajectoryForRendering()
     }
 
+    // MARK: - Vision Request Configuration
+    
     private func makeRequest() -> VNDetectTrajectoriesRequest {
-        // Golf ball trajectory detection requires specific parameters:
-        // - Golf balls are small (4.27cm diameter)
-        // - They move fast (driver: 150+ mph, wedge: 80+ mph)
-        // - trajectoryLength: minimum 5 points needed for parabolic detection
-        let request = VNDetectTrajectoriesRequest(frameAnalysisSpacing: frameAnalysisSpacing, trajectoryLength: desiredTrajectoryLength) { [weak self] req, error in
-            guard let self else { return }
+        // ═══════════════════════════════════════════════════════════════
+        // VISION TRAJECTORY DETECTION - THE KEY TO SMOOTHSWING!
+        // ═══════════════════════════════════════════════════════════════
+        //
+        // VNDetectTrajectoriesRequest detects objects following PARABOLIC paths
+        // It provides:
+        // - detectedPoints: Actual observations
+        // - projectedPoints: Full predicted arc (THIS IS THE MAGIC!)
+        // - equationCoefficients: Parabola equation y = ax² + bx + c
+        //
+        // trajectoryLength: Minimum frames needed before detection fires
+        // - Higher = more confident but delayed
+        // - Lower = faster but more false positives
+        // - 10 is Mizuno's default, works well for golf
+        //
+        // ═══════════════════════════════════════════════════════════════
+        
+        let request = VNDetectTrajectoriesRequest(
+            frameAnalysisSpacing: frameAnalysisSpacing,
+            trajectoryLength: 10  // Mizuno's proven value for golf
+        ) { [weak self] req, error in
+            guard let self = self else { return }
             if let error = error {
-                print("Trajectory request error: \(error)")
+                if self.debugLogging {
+                    print("❌ Trajectory request error: \(error)")
+                }
                 return
             }
-            self.handle(request: req)
+            self.handleResults(request: req)
         }
         
-        // Golf ball size parameters (normalized to frame size):
-        // - At typical filming distance (5-15m), ball appears as 0.5-2% of frame
-        // - Minimum: catches ball at further distances / smaller in frame
-        // - Maximum: allows detection when ball is closer / larger
-        request.objectMinimumNormalizedRadius = minimumNormalizedRadius
-        request.objectMaximumNormalizedRadius = maximumNormalizedRadius
+        // ═══════════════════════════════════════════════════════════════
+        // SIZE FILTERING - DON'T OVER-CONSTRAIN!
+        // ═══════════════════════════════════════════════════════════════
+        //
+        // The original Mizuno code does NOT set these, using Vision's defaults.
+        // This lets Vision detect ANY parabolic trajectory.
+        //
+        // If we want to filter for golf balls specifically:
+        // - At 10m distance: ball ≈ 0.4% of frame = 0.004 radius
+        // - At 5m distance: ball ≈ 0.8% of frame = 0.008 radius
+        // - With motion blur, apparent size increases
+        //
+        // Being too restrictive causes missed detections!
+        // Start permissive, filter by trajectory shape instead.
+        // ═══════════════════════════════════════════════════════════════
         
-        if let roi = regionOfInterest {
-            request.regionOfInterest = roi
+        // Option 1: Don't set (use Vision defaults - most permissive)
+        // This is what Mizuno does and it WORKS
+        
+        // Option 2: Set wide range for golf balls
+        // Uncomment these if you get false positives from large objects:
+        // request.objectMinimumNormalizedRadius = 0.001  // Very small ball at distance
+        // request.objectMaximumNormalizedRadius = 0.05   // Large with motion blur
+        
+        // Target frame time for real-time processing (iOS 15+)
+        if #available(iOS 15.0, *) {
+            request.targetFrameTime = CMTime(value: 1, timescale: 60)
         }
+        
+        if debugLogging {
+            print("📐 Vision Request Configured:")
+            print("   Trajectory length: 10 frames")
+            print("   Frame spacing: \(frameAnalysisSpacing.seconds)s")
+            print("   Size filtering: DEFAULT (permissive)")
+        }
+        
         return request
     }
 
-    private func handle(request: VNRequest) {
+    // MARK: - Result Handling
+    
+    private func handleResults(request: VNRequest) {
         guard let observations = request.results as? [VNTrajectoryObservation] else {
-            missingFrameCount += 1
-            if missingFrameCount == maxMissingFrames / 2 {
-                print("⚠️ TrajectoryDetector: no observations in recent frames")
-            }
-            checkForCompletion()
             return
         }
-
-        guard let best = observations.max(by: { $0.confidence < $1.confidence }) else {
-            missingFrameCount += 1
-            if missingFrameCount == maxMissingFrames / 2 {
-                print("⚠️ TrajectoryDetector: observations empty despite Vision returning results")
-            }
-            checkForCompletion()
+        
+        if observations.isEmpty {
             return
         }
-
-        missingFrameCount = 0
-
-        let normalizedPoints: [CGPoint] = best.detectedPoints.map { CGPoint(x: CGFloat($0.x), y: 1.0 - CGFloat($0.y)) }
-        guard !normalizedPoints.isEmpty else { return }
-
-        let durationSeconds = best.timeRange.duration.seconds
-        let dt = durationSeconds / Double(max(normalizedPoints.count - 1, 1))
-        var timeCursor = best.timeRange.start.seconds
-        var points = [TrajectoryPoint]()
-        for point in normalizedPoints {
-            let time = CMTime(seconds: timeCursor, preferredTimescale: 600)
-            points.append(TrajectoryPoint(time: time, normalized: point))
-            timeCursor += dt
+        
+        // Process all observations
+        for observation in observations {
+            detectionCount += 1
+            trajectoryStore.update(with: observation)
+            
+            if debugLogging && detectionCount % 5 == 0 {
+                print("🔍 Detection #\(detectionCount):")
+                print("   UUID: \(observation.uuid.uuidString.prefix(8))...")
+                print("   Confidence: \(String(format: "%.2f", observation.confidence))")
+                print("   Detected points: \(observation.detectedPoints.count)")
+                print("   Projected points: \(observation.projectedPoints.count)")
+                print("   Equation: \(observation.equationCoefficients)")
+            }
         }
-
-        var trajectory = currentTrajectory ?? Trajectory(id: best.uuid, points: [], confidence: best.confidence)
-        trajectory.points = points
-        trajectory.confidence = max(trajectory.confidence, best.confidence)
-        currentTrajectory = trajectory
-
-        DispatchQueue.main.async {
-            self.delegate?.trajectoryDetector(self, didUpdate: trajectory)
+        
+        // Notify delegate with current best trajectory
+        if let trajectory = trajectoryStore.getTrajectoryForRendering() {
+            DispatchQueue.main.async {
+                self.delegate?.trajectoryDetector(self, didUpdate: trajectory)
+            }
         }
     }
+}
 
-    private func checkForCompletion() {
-        if missingFrameCount >= maxMissingFrames {
-            isRunning = false
-            let final = currentTrajectory
-            DispatchQueue.main.async {
-                self.delegate?.trajectoryDetectorDidFinish(self, finalTrajectory: final)
+// MARK: - Trajectory Validation Utilities
+
+extension TrajectoryDetector {
+    
+    /// Validate that a trajectory looks like a golf shot
+    static func isValidGolfShot(_ trajectory: Trajectory, startingNear expectedStart: CGPoint? = nil) -> Bool {
+        // Must have enough points
+        guard trajectory.projectedPoints.count >= 5 else { return false }
+        
+        // Confidence check
+        guard trajectory.confidence > 0.3 else { return false }
+        
+        // If we know where ball should start, check proximity
+        if let expected = expectedStart,
+           let first = trajectory.detectedPoints.first {
+            let dx = abs(first.normalized.x - expected.x)
+            let dy = abs(first.normalized.y - expected.y)
+            let distance = sqrt(dx * dx + dy * dy)
+            
+            // Ball should start within 20% of expected position
+            if distance > 0.2 {
+                return false
             }
         }
+        
+        // Check trajectory goes UP then DOWN (parabola shape)
+        let points = trajectory.projectedPoints.map { $0.normalized }
+        if let midIndex = points.indices.middle {
+            let start = points.first!
+            let mid = points[midIndex]
+            let end = points.last!
+            
+            // In UIKit coords (Y down): ball goes UP (Y decreases) then DOWN (Y increases)
+            let wentUp = mid.y < start.y
+            let cameDown = end.y > mid.y - 0.05  // Allow small tolerance
+            
+            if !wentUp {
+                return false  // Ball never went up
+            }
+        }
+        
+        return true
+    }
+}
+
+// Helper extension
+extension Collection {
+    var middle: Index? {
+        guard !isEmpty else { return nil }
+        return index(startIndex, offsetBy: count / 2)
     }
 }

@@ -3,13 +3,14 @@ import UIKit
 // MARK: - Recording Controls Delegate
 protocol RecordingControlsDelegate: AnyObject {
     func recordingControlsDidTapRecord(_ controls: RecordingControlsView)
-    func recordingControlsDidTapImport(_ controls: RecordingControlsView)
     func recordingControlsDidTapSettings(_ controls: RecordingControlsView)
+    func recordingControlsDidTapRealign(_ controls: RecordingControlsView)
     func recordingControls(_ controls: RecordingControlsView, didSelectColor color: UIColor)
     func recordingControls(_ controls: RecordingControlsView, didSelectStyle style: TracerStyle)
 }
 
 // MARK: - Recording Controls View
+/// Clean, focused controls for live recording only
 final class RecordingControlsView: UIView {
     
     weak var delegate: RecordingControlsDelegate?
@@ -23,7 +24,7 @@ final class RecordingControlsView: UIView {
         didSet { updateTimerDisplay() }
     }
     
-    var selectedColor: UIColor = ShotTracerDesign.Colors.tracerRed {
+    var selectedColor: UIColor = ShotTracerDesign.Colors.tracerGold {
         didSet { updateColorSelection() }
     }
     
@@ -43,7 +44,7 @@ final class RecordingControlsView: UIView {
     
     private let bottomBar = GlassmorphicView()
     private let recordButton = RecordButton()
-    private let importButton = UIButton(type: .system)
+    private let realignButton = UIButton(type: .system)
     private let colorPickerButton = UIButton(type: .system)
     
     private let colorPicker = TracerColorPicker()
@@ -119,15 +120,15 @@ final class RecordingControlsView: UIView {
         bottomBar.translatesAutoresizingMaskIntoConstraints = false
         addSubview(bottomBar)
         
-        // Import button
-        importButton.translatesAutoresizingMaskIntoConstraints = false
-        let importConfig = UIImage.SymbolConfiguration(pointSize: 24, weight: .medium)
-        importButton.setImage(UIImage(systemName: "photo.on.rectangle.angled", withConfiguration: importConfig), for: .normal)
-        importButton.tintColor = ShotTracerDesign.Colors.textPrimary
-        importButton.backgroundColor = ShotTracerDesign.Colors.surfaceOverlay
-        importButton.layer.cornerRadius = 28
-        importButton.addTarget(self, action: #selector(importTapped), for: .touchUpInside)
-        bottomBar.addSubview(importButton)
+        // Realign button (replaces import button)
+        realignButton.translatesAutoresizingMaskIntoConstraints = false
+        let realignConfig = UIImage.SymbolConfiguration(pointSize: 24, weight: .medium)
+        realignButton.setImage(UIImage(systemName: "person.crop.rectangle", withConfiguration: realignConfig), for: .normal)
+        realignButton.tintColor = ShotTracerDesign.Colors.textPrimary
+        realignButton.backgroundColor = ShotTracerDesign.Colors.surfaceOverlay
+        realignButton.layer.cornerRadius = 28
+        realignButton.addTarget(self, action: #selector(realignTapped), for: .touchUpInside)
+        bottomBar.addSubview(realignButton)
         
         // Record button
         recordButton.translatesAutoresizingMaskIntoConstraints = false
@@ -154,10 +155,10 @@ final class RecordingControlsView: UIView {
             recordButton.widthAnchor.constraint(equalToConstant: 80),
             recordButton.heightAnchor.constraint(equalToConstant: 80),
             
-            importButton.trailingAnchor.constraint(equalTo: recordButton.leadingAnchor, constant: -ShotTracerDesign.Spacing.xl),
-            importButton.centerYAnchor.constraint(equalTo: bottomBar.centerYAnchor),
-            importButton.widthAnchor.constraint(equalToConstant: 56),
-            importButton.heightAnchor.constraint(equalToConstant: 56),
+            realignButton.trailingAnchor.constraint(equalTo: recordButton.leadingAnchor, constant: -ShotTracerDesign.Spacing.xl),
+            realignButton.centerYAnchor.constraint(equalTo: bottomBar.centerYAnchor),
+            realignButton.widthAnchor.constraint(equalToConstant: 56),
+            realignButton.heightAnchor.constraint(equalToConstant: 56),
             
             colorPickerButton.leadingAnchor.constraint(equalTo: recordButton.trailingAnchor, constant: ShotTracerDesign.Spacing.xl),
             colorPickerButton.centerYAnchor.constraint(equalTo: bottomBar.centerYAnchor),
@@ -186,8 +187,8 @@ final class RecordingControlsView: UIView {
         recordButton.isRecording = isRecording
         
         UIView.animate(withDuration: ShotTracerDesign.Animation.normal) {
-            self.importButton.alpha = self.isRecording ? 0.3 : 1.0
-            self.importButton.isUserInteractionEnabled = !self.isRecording
+            self.realignButton.alpha = self.isRecording ? 0.3 : 1.0
+            self.realignButton.isUserInteractionEnabled = !self.isRecording
             
             self.colorPickerButton.alpha = self.isRecording ? 0.3 : 1.0
             self.colorPickerButton.isUserInteractionEnabled = !self.isRecording
@@ -233,9 +234,9 @@ final class RecordingControlsView: UIView {
         delegate?.recordingControlsDidTapRecord(self)
     }
     
-    @objc private func importTapped() {
+    @objc private func realignTapped() {
         ShotTracerDesign.Haptics.buttonTap()
-        delegate?.recordingControlsDidTapImport(self)
+        delegate?.recordingControlsDidTapRealign(self)
     }
     
     @objc private func settingsTapped() {
@@ -595,5 +596,3 @@ final class TracerColorPicker: GlassmorphicView {
         delegate?.colorPicker(self, didSelectStyle: style)
     }
 }
-
-

@@ -1,37 +1,44 @@
 import AVFoundation
 import Vision
 import CoreImage
+import UIKit
 
-/// Live Shot Detector - Detects golf swings and tracks balls in real-time
-/// Uses: Person segmentation + Pose detection + Ball tracking
+/// Live Shot Detector - Detects golf swings and impacts using pose detection
+/// Uses: Person segmentation + Pose detection + Velocity-based impact detection
 @available(iOS 15.0, *)
 final class LiveShotDetector {
     
     // MARK: - Types
-    enum SwingPhase {
-        case setup      // Player at address
-        case backswing  // Club going back
-        case downswing  // Club coming down
-        case impact     // Club hits ball
-        case followThru // After impact
-        case idle       // No swing detected
+    
+    enum SwingPhase: String {
+        case idle = "Idle"
+        case setup = "Setup"
+        case backswing = "Backswing"
+        case topOfSwing = "Top"
+        case downswing = "Downswing"
+        case impact = "Impact"
+        case followThru = "Follow Through"
+        case finished = "Finished"
     }
     
     struct DetectionResult {
         let personMask: CIImage?
         let swingPhase: SwingPhase
-        let ballPosition: CGPoint?  // Normalized 0-1
         let isLocked: Bool
     }
     
     // MARK: - Callbacks
+    
     var onSwingPhaseChanged: ((SwingPhase) -> Void)?
-    var onBallDetected: ((CGPoint) -> Void)?
     var onLockStatusChanged: ((Bool) -> Void)?
-    var onTrajectoryUpdated: (([CGPoint]) -> Void)?
+    var onImpactDetected: (() -> Void)?
     
     // MARK: - Properties
+    
     private let sequenceHandler = VNSequenceRequestHandler()
+    
+    /// Debug logging
+    var debugLogging = true
     
     // Person segmentation
     private lazy var segmentationRequest: VNGeneratePersonSegmentationRequest = {
@@ -43,25 +50,35 @@ final class LiveShotDetector {
     
     // Body pose detection
     private lazy var poseRequest: VNDetectHumanBodyPoseRequest = {
-        let request = VNDetectHumanBodyPoseRequest()
-        return request
+        return VNDetectHumanBodyPoseRequest()
     }()
     
-    // State
+    // MARK: - State
+    
     private var isLocked = false
     private var lockedBallPosition: CGPoint?
-    private var previousWristY: CGFloat?
     private var currentPhase: SwingPhase = .idle
-    private var impactDetected = false
-    private var trajectoryPoints: [CGPoint] = []
+    private(set) var impactDetected = false
     
-    // Ball tracking
-    private var lastKnownBallPosition: CGPoint?
-    private var previousFrameBuffer: CVPixelBuffer?
+    // MARK: - Swing Detection State
+    
+    /// Wrist position history for velocity calculation
+    private var wristYHistory: [Double] = []
+    private var wristVelocityHistory: [Double] = []
+    private let historySize = 15
+    
+    /// Track peak velocities for impact detection
+    private var peakDownwardVelocity: Double = 0
+    private var framesSincePeakVelocity = 0
+    
+    /// Threshold for detecting swing phases
+    private let backswingVelocityThreshold = 0.015    // Wrists moving up
+    private let downswingVelocityThreshold = -0.02    // Wrists moving down fast
+    private let impactVelocityThreshold = -0.04       // Very fast downward at impact
     
     // Timing
     private var impactTime: Date?
-    private let postImpactTrackingDuration: TimeInterval = 3.0
+    private let postImpactDuration: TimeInterval = 4.0
     
     // MARK: - Public API
     
@@ -69,13 +86,19 @@ final class LiveShotDetector {
     func lockPosition(ballPosition: CGPoint) {
         isLocked = true
         lockedBallPosition = ballPosition
-        lastKnownBallPosition = ballPosition
         impactDetected = false
-        trajectoryPoints.removeAll()
         
-        print("🔒 Position LOCKED - Ball at: (\(String(format: "%.3f", ballPosition.x)), \(String(format: "%.3f", ballPosition.y)))")
+        // Reset swing detection
+        wristYHistory.removeAll()
+        wristVelocityHistory.removeAll()
+        peakDownwardVelocity = 0
+        framesSincePeakVelocity = 0
+        currentPhase = .setup
         
-        // Trigger haptic feedback
+        if debugLogging {
+            print("🔒 LiveShotDetector: LOCKED at (\(String(format: "%.3f", ballPosition.x)), \(String(format: "%.3f", ballPosition.y)))")
+        }
+        
         onLockStatusChanged?(true)
     }
     
@@ -84,16 +107,35 @@ final class LiveShotDetector {
         isLocked = false
         lockedBallPosition = nil
         impactDetected = false
-        trajectoryPoints.removeAll()
         currentPhase = .idle
+        
+        wristYHistory.removeAll()
+        wristVelocityHistory.removeAll()
+        peakDownwardVelocity = 0
+        impactTime = nil
         
         onLockStatusChanged?(false)
     }
     
+    /// Check if shot tracking is complete
+    func isTrackingComplete() -> Bool {
+        if let impactT = impactTime {
+            return Date().timeIntervalSince(impactT) > postImpactDuration
+        }
+        return false
+    }
+    
+    /// Mark as finished
+    func markFinished() {
+        if currentPhase != .finished {
+            currentPhase = .finished
+            onSwingPhaseChanged?(.finished)
+        }
+    }
+    
     /// Process a live camera frame
-    func processFrame(_ pixelBuffer: CVPixelBuffer, orientation: CGImagePropertyOrientation) -> DetectionResult {
+    func processFrame(_ pixelBuffer: CVPixelBuffer, time: CMTime, orientation: CGImagePropertyOrientation) -> DetectionResult {
         var personMask: CIImage?
-        var detectedBallPosition: CGPoint?
         
         // 1. Person Segmentation (for silhouette overlay)
         do {
@@ -102,51 +144,26 @@ final class LiveShotDetector {
                 personMask = CIImage(cvPixelBuffer: maskBuffer)
             }
         } catch {
-            // Non-fatal
+            // Non-fatal - continue without mask
         }
         
-        // 2. Body Pose Detection (for swing phase)
-        do {
-            try sequenceHandler.perform([poseRequest], on: pixelBuffer, orientation: orientation)
-            if let pose = poseRequest.results?.first {
-                detectSwingPhase(from: pose)
+        // 2. Body Pose Detection (for swing phase detection)
+        if isLocked && !impactDetected {
+            do {
+                try sequenceHandler.perform([poseRequest], on: pixelBuffer, orientation: orientation)
+                if let pose = poseRequest.results?.first {
+                    detectSwingPhase(from: pose)
+                }
+            } catch {
+                // Non-fatal
             }
-        } catch {
-            // Non-fatal
         }
-        
-        // 3. Ball Tracking (after impact)
-        if isLocked && impactDetected {
-            detectedBallPosition = trackBall(in: pixelBuffer, orientation: orientation)
-        }
-        
-        previousFrameBuffer = pixelBuffer
         
         return DetectionResult(
             personMask: personMask,
             swingPhase: currentPhase,
-            ballPosition: detectedBallPosition,
             isLocked: isLocked
         )
-    }
-    
-    /// Get current trajectory
-    func getTrajectory() -> [CGPoint] {
-        return trajectoryPoints
-    }
-    
-    /// Build final trajectory
-    func buildTrajectory() -> Trajectory? {
-        guard trajectoryPoints.count >= 3 else { return nil }
-        
-        let points = trajectoryPoints.enumerated().map { index, point in
-            TrajectoryPoint(
-                time: CMTime(seconds: Double(index) * 0.033, preferredTimescale: 600), // ~30fps
-                normalized: point
-            )
-        }
-        
-        return Trajectory(id: UUID(), points: points, confidence: 0.9)
     }
     
     // MARK: - Swing Phase Detection
@@ -155,71 +172,120 @@ final class LiveShotDetector {
         // Get key points for swing detection
         guard let rightWrist = try? pose.recognizedPoint(.rightWrist),
               let leftWrist = try? pose.recognizedPoint(.leftWrist),
-              let rightShoulder = try? pose.recognizedPoint(.rightShoulder),
-              rightWrist.confidence > 0.3,
-              leftWrist.confidence > 0.3 else {
+              rightWrist.confidence > 0.3 || leftWrist.confidence > 0.3 else {
             return
         }
         
-        // Average wrist position (club position proxy)
-        let wristY = (rightWrist.location.y + leftWrist.location.y) / 2
-        _ = (rightWrist.location.x + leftWrist.location.x) / 2  // wristX for future use
-        let shoulderY = rightShoulder.location.y
+        // Use the more confident wrist, or average if both are good
+        let wristY: Double
+        if rightWrist.confidence > 0.3 && leftWrist.confidence > 0.3 {
+            wristY = (rightWrist.location.y + leftWrist.location.y) / 2
+        } else if rightWrist.confidence > leftWrist.confidence {
+            wristY = rightWrist.location.y
+        } else {
+            wristY = leftWrist.location.y
+        }
         
-        let oldPhase = currentPhase
+        // Store position history
+        wristYHistory.append(wristY)
+        if wristYHistory.count > historySize {
+            wristYHistory.removeFirst()
+        }
         
-        // Detect swing phases based on wrist position relative to shoulder
-        if let prevY = previousWristY {
-            let wristMovement = wristY - prevY
-            
-            switch currentPhase {
-            case .idle, .setup:
-                // Wrists near waist level = setup
-                if wristY < shoulderY - 0.1 {
-                    currentPhase = .setup
-                }
-                // Wrists moving up significantly = backswing starting
-                if wristMovement > 0.02 && wristY > shoulderY {
-                    currentPhase = .backswing
-                }
-                
-            case .backswing:
-                // Wrists at highest point and starting to come down
-                if wristMovement < -0.02 {
-                    currentPhase = .downswing
-                    print("⬇️ DOWNSWING detected")
-                }
-                
-            case .downswing:
-                // Wrists back at ball level with high velocity = impact
-                if wristY < shoulderY - 0.05 && abs(wristMovement) > 0.03 {
-                    currentPhase = .impact
-                    impactDetected = true
-                    impactTime = Date()
-                    lastKnownBallPosition = lockedBallPosition
-                    print("💥 IMPACT detected! Starting ball tracking...")
-                    
-                    // Add initial ball position
-                    if let ballPos = lockedBallPosition {
-                        trajectoryPoints.append(ballPos)
-                    }
-                }
-                
-            case .impact:
-                // Transition to follow through
-                currentPhase = .followThru
-                
-            case .followThru:
-                // Check if we should stop tracking
-                if let impactT = impactTime, 
-                   Date().timeIntervalSince(impactT) > postImpactTrackingDuration {
-                    currentPhase = .idle
-                    print("✅ Shot complete - \(trajectoryPoints.count) trajectory points")
-                }
+        // Calculate velocity (change between frames)
+        if wristYHistory.count >= 2 {
+            let velocity = wristYHistory.last! - wristYHistory[wristYHistory.count - 2]
+            wristVelocityHistory.append(velocity)
+            if wristVelocityHistory.count > historySize {
+                wristVelocityHistory.removeFirst()
             }
         }
         
-        previousWristY = wristY
+        guard wristVelocityHistory.count >= 3 else { return }
+        
+        // Smooth velocity (moving average)
+        let recentVelocities = Array(wristVelocityHistory.suffix(5))
+        let avgVelocity = recentVelocities.reduce(0, +) / Double(recentVelocities.count)
+        
+        let oldPhase = currentPhase
+        
+        // State machine for swing phase detection
+        switch currentPhase {
+        case .idle, .setup:
+            // Detect backswing start: wrists moving up
+            if avgVelocity > backswingVelocityThreshold {
+                currentPhase = .backswing
+                if debugLogging {
+                    print("⬆️ BACKSWING detected (velocity: \(String(format: "%.4f", avgVelocity)))")
+                }
+            }
+            
+        case .backswing:
+            // Track peak (top of swing)
+            if avgVelocity < 0.005 && avgVelocity > -0.01 {
+                let wasGoingUp = wristVelocityHistory.dropLast(3).suffix(3).contains { $0 > 0.01 }
+                if wasGoingUp {
+                    currentPhase = .topOfSwing
+                    if debugLogging {
+                        print("🔝 TOP OF SWING detected")
+                    }
+                }
+            }
+            
+            // Direct transition to downswing if velocity reverses sharply
+            if avgVelocity < downswingVelocityThreshold {
+                currentPhase = .downswing
+                peakDownwardVelocity = avgVelocity
+                framesSincePeakVelocity = 0
+                if debugLogging {
+                    print("⬇️ DOWNSWING detected (velocity: \(String(format: "%.4f", avgVelocity)))")
+                }
+            }
+            
+        case .topOfSwing:
+            // Detect downswing start
+            if avgVelocity < downswingVelocityThreshold {
+                currentPhase = .downswing
+                peakDownwardVelocity = avgVelocity
+                framesSincePeakVelocity = 0
+                if debugLogging {
+                    print("⬇️ DOWNSWING detected (velocity: \(String(format: "%.4f", avgVelocity)))")
+                }
+            }
+            
+        case .downswing:
+            framesSincePeakVelocity += 1
+            
+            // Track peak downward velocity
+            if avgVelocity < peakDownwardVelocity {
+                peakDownwardVelocity = avgVelocity
+                framesSincePeakVelocity = 0
+            }
+            
+            // Impact detection
+            let isHighVelocity = peakDownwardVelocity < impactVelocityThreshold
+            let isDecelerating = avgVelocity > peakDownwardVelocity + 0.01
+            let pastPeak = framesSincePeakVelocity >= 2
+            
+            if isHighVelocity && isDecelerating && pastPeak {
+                triggerImpact()
+            }
+            
+            // Timeout
+            if framesSincePeakVelocity > 30 {
+                currentPhase = .setup
+                peakDownwardVelocity = 0
+                if debugLogging {
+                    print("⚠️ Downswing timeout - resetting")
+                }
+            }
+            
+        case .impact:
+            currentPhase = .followThru
+            
+        case .followThru, .finished:
+            break
+        }
         
         // Notify if phase changed
         if oldPhase != currentPhase {
@@ -227,106 +293,44 @@ final class LiveShotDetector {
         }
     }
     
-    // MARK: - Ball Tracking
+    private func triggerImpact() {
+        guard !impactDetected else { return }
+        
+        currentPhase = .impact
+        impactDetected = true
+        impactTime = Date()
+        
+        // Haptic feedback
+        let generator = UIImpactFeedbackGenerator(style: .heavy)
+        generator.impactOccurred()
+        
+        if debugLogging {
+            print("💥 IMPACT DETECTED!")
+            print("   Peak velocity was: \(String(format: "%.4f", peakDownwardVelocity))")
+        }
+        
+        onImpactDetected?()
+        onSwingPhaseChanged?(.impact)
+    }
     
-    private func trackBall(in pixelBuffer: CVPixelBuffer, orientation: CGImagePropertyOrientation) -> CGPoint? {
-        guard let lastPos = lastKnownBallPosition else { return nil }
-        
-        // Don't track too long after impact
-        if let impactT = impactTime,
-           Date().timeIntervalSince(impactT) > postImpactTrackingDuration {
-            return nil
-        }
-        
-        let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
-        
-        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
-        
-        guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else { return nil }
-        
-        let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
-        let buffer = baseAddress.assumingMemoryBound(to: UInt8.self)
-        
-        // Search area - ball should be moving UP and slightly forward from last position
-        // Expand search upward more than downward
-        let searchRadius: CGFloat = 0.08
-        let upwardBias: CGFloat = 0.05
-        
-        let searchMinX = max(0, Int((lastPos.x - searchRadius) * CGFloat(width)))
-        let searchMaxX = min(width - 1, Int((lastPos.x + searchRadius) * CGFloat(width)))
-        let searchMinY = max(0, Int((lastPos.y - searchRadius - upwardBias) * CGFloat(height)))
-        let searchMaxY = min(height - 1, Int((lastPos.y + searchRadius * 0.5) * CGFloat(height)))
-        
-        // Find brightest cluster (white ball against sky)
-        var brightPixels: [(x: Int, y: Int, brightness: Int)] = []
-        let whiteThreshold: UInt8 = 220
-        
-        for y in searchMinY...searchMaxY {
-            for x in searchMinX...searchMaxX {
-                let offset = y * bytesPerRow + x * 4
-                let b = buffer[offset]
-                let g = buffer[offset + 1]
-                let r = buffer[offset + 2]
-                
-                let brightness = (Int(r) + Int(g) + Int(b)) / 3
-                if brightness > Int(whiteThreshold) {
-                    brightPixels.append((x, y, brightness))
-                }
-            }
-        }
-        
-        guard brightPixels.count >= 3 else { return nil }
-        
-        // Find centroid of bright pixels
-        let sortedByBrightness = brightPixels.sorted { $0.brightness > $1.brightness }
-        let topPixels = Array(sortedByBrightness.prefix(50))
-        
-        let totalX = topPixels.reduce(0) { $0 + $1.x }
-        let totalY = topPixels.reduce(0) { $0 + $1.y }
-        
-        let centerX = CGFloat(totalX) / CGFloat(topPixels.count)
-        let centerY = CGFloat(totalY) / CGFloat(topPixels.count)
-        
-        // Normalize
-        var normalizedX = centerX / CGFloat(width)
-        var normalizedY = centerY / CGFloat(height)
-        
-        // Apply orientation correction
-        switch orientation {
-        case .right:
-            let temp = normalizedX
-            normalizedX = 1 - normalizedY
-            normalizedY = temp
-        case .left:
-            let temp = normalizedX
-            normalizedX = normalizedY
-            normalizedY = 1 - temp
-        case .down:
-            normalizedX = 1 - normalizedX
-            normalizedY = 1 - normalizedY
+    // MARK: - Haptic Support
+    
+    func provideSwingFeedback(for phase: SwingPhase) {
+        switch phase {
+        case .backswing:
+            let generator = UIImpactFeedbackGenerator(style: .light)
+            generator.impactOccurred()
+            
+        case .impact:
+            let generator = UINotificationFeedbackGenerator()
+            generator.notificationOccurred(.success)
+            
+        case .finished:
+            let generator = UINotificationFeedbackGenerator()
+            generator.notificationOccurred(.success)
+            
         default:
             break
         }
-        
-        // Validate: ball should be moving upward (lower Y in Vision coords) after impact
-        if let lastY = trajectoryPoints.last?.y {
-            // In normalized coords, ball going UP means Y is decreasing
-            if normalizedY > lastY + 0.02 {
-                // Ball moving down too much - probably lost it
-                return nil
-            }
-        }
-        
-        let newPosition = CGPoint(x: normalizedX, y: normalizedY)
-        lastKnownBallPosition = newPosition
-        trajectoryPoints.append(newPosition)
-        
-        onBallDetected?(newPosition)
-        onTrajectoryUpdated?(trajectoryPoints)
-        
-        return newPosition
     }
 }
-

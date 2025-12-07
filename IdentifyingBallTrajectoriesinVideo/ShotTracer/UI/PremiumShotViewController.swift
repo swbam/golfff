@@ -1,8 +1,14 @@
 import UIKit
 import AVFoundation
-import PhotosUI
 
 // MARK: - Premium Shot View Controller
+/// Main view controller for live golf shot recording and tracing
+/// 
+/// Flow:
+/// 1. Alignment - User aligns with silhouette (ball position is FIXED)
+/// 2. Record - High frame rate capture (240fps)
+/// 3. Track - Detect ball in flight
+/// 4. Export - Video with tracer overlay at 30fps
 final class PremiumShotViewController: UIViewController {
     
     // MARK: - Core Components
@@ -30,15 +36,35 @@ final class PremiumShotViewController: UIViewController {
         super.viewDidLoad()
         setupUI()
         setupBindings()
+        
+        // In simulator, skip camera and go straight to test mode
+        #if targetEnvironment(simulator)
+        // Don't start camera in simulator - run tests instead!
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.runTestsAutomatically()
+        }
+        #else
         sessionController.startSession()
+        #endif
+        
+        // Show test mode button in simulator/debug
+        #if DEBUG
+        setupDebugUI()
+        #endif
     }
     
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        
+        #if targetEnvironment(simulator)
+        // Skip alignment in simulator - we're running tests instead
+        return
+        #else
         if !hasShownAlignment {
             hasShownAlignment = true
             presentAlignment()
         }
+        #endif
     }
     
     override var prefersStatusBarHidden: Bool { true }
@@ -98,9 +124,11 @@ final class PremiumShotViewController: UIViewController {
     }
     
     // MARK: - Alignment
+    /// Present the alignment screen where user positions themselves with the silhouette
+    /// The ball position is FIXED in the silhouette - NO TAP REQUIRED!
     private func presentAlignment() {
-        // Skip alignment on simulator - no camera available
         #if targetEnvironment(simulator)
+        // Skip alignment on simulator - no camera available
         sessionController.state = .ready
         showSimulatorWarning()
         return
@@ -116,7 +144,8 @@ final class PremiumShotViewController: UIViewController {
         let alignmentVC = PremiumAlignmentViewController(session: session) { [weak self] result in
             guard let self = self else { return }
             
-            // Set ROI and ball position
+            // Set ROI and ball position from silhouette
+            // Ball position comes from silhouette - NO USER TAP REQUIRED!
             self.sessionController.setRegionOfInterest(result.roi)
             self.sessionController.lockPosition(ballPosition: result.ballPosition)
             self.sessionController.state = .ready
@@ -153,34 +182,6 @@ final class PremiumShotViewController: UIViewController {
         timer = nil
     }
     
-    // MARK: - Import Video
-    private func presentImportPicker() {
-        var config = PHPickerConfiguration()
-        config.filter = .videos
-        config.selectionLimit = 1
-        
-        let picker = PHPickerViewController(configuration: config)
-        picker.delegate = self
-        present(picker, animated: true)
-    }
-    
-    private func processImportedVideo(url: URL) {
-        let asset = AVAsset(url: url)
-        let roiPicker = ImportROIPickerViewController(asset: asset) { [weak self] result in
-            guard let self = self else { return }
-            
-            // If trajectory was already detected during processing, export directly
-            if let trajectory = result.trajectory, !trajectory.points.isEmpty {
-                // Use the pre-detected trajectory
-                self.sessionController.importVideoWithManualTrajectory(from: url, trajectory: trajectory)
-            } else {
-                // Fall back to auto-detect with ball position
-                self.sessionController.importVideo(from: url, roi: result.roi, ballPosition: result.ballPosition)
-            }
-        }
-        present(roiPicker, animated: true)
-    }
-    
     // MARK: - Error Handling
     private func showError(_ error: Error) {
         let alert = UIAlertController(
@@ -199,7 +200,7 @@ extension PremiumShotViewController: RecordingControlsDelegate {
     func recordingControlsDidTapRecord(_ controls: RecordingControlsView) {
         switch sessionController.state {
         case .ready:
-            // Start recording
+            // Start recording at HIGH FRAME RATE
             sessionController.startRecording()
             controls.isRecording = true
             startTimer()
@@ -207,7 +208,7 @@ extension PremiumShotViewController: RecordingControlsDelegate {
             ShotTracerDesign.Haptics.recordStart()
             
         case .recording:
-            // Stop recording
+            // Stop recording - will process and export
             sessionController.stopRecording()
             controls.isRecording = false
             stopTimer()
@@ -218,19 +219,16 @@ extension PremiumShotViewController: RecordingControlsDelegate {
         }
     }
     
-    func recordingControlsDidTapImport(_ controls: RecordingControlsView) {
-        presentImportPicker()
-    }
-    
     func recordingControlsDidTapSettings(_ controls: RecordingControlsView) {
-        presentSettings()
-    }
-    
-    private func presentSettings() {
         let settingsVC = SettingsViewController()
         let nav = UINavigationController(rootViewController: settingsVC)
         nav.modalPresentationStyle = .formSheet
         present(nav, animated: true)
+    }
+    
+    func recordingControlsDidTapRealign(_ controls: RecordingControlsView) {
+        hasShownAlignment = false
+        presentAlignment()
     }
     
     func recordingControls(_ controls: RecordingControlsView, didSelectColor color: UIColor) {
@@ -249,7 +247,7 @@ extension PremiumShotViewController: ShotSessionControllerDelegate {
     func shotSession(_ controller: ShotSessionController, didUpdateState state: ShotState) {
         switch state {
         case .recording:
-            recordingControls.statusText = "Recording"
+            recordingControls.statusText = "Recording @ \(Int(cameraManager.currentFrameRate))fps"
             
         case .tracking:
             recordingControls.statusText = "Processing..."
@@ -257,9 +255,6 @@ extension PremiumShotViewController: ShotSessionControllerDelegate {
         case .exporting:
             recordingControls.statusText = "Exporting..."
             recordingControls.isRecording = false
-            
-        case .importing:
-            recordingControls.statusText = "Importing..."
             
         case .ready:
             recordingControls.statusText = "Ready"
@@ -273,15 +268,25 @@ extension PremiumShotViewController: ShotSessionControllerDelegate {
             
         case .finished:
             recordingControls.statusText = "Ready"
+            
+        case .importing:
+            // Not used anymore
+            recordingControls.statusText = "Processing..."
         }
     }
     
     func shotSession(_ controller: ShotSessionController, didUpdateTrajectory trajectory: Trajectory) {
-        let points = trajectory.points.map { $0.normalized }
-        glowingTracerView.update(with: points, color: controller.tracerColor)
+        // Use projectedPoints for live rendering (smooth full arc)
+        // This ensures LIVE = EXPORT
+        let pointsToRender = trajectory.projectedPoints.isEmpty
+            ? trajectory.detectedPoints
+            : trajectory.projectedPoints
+        
+        let normalizedPoints = pointsToRender.map { $0.normalized }
+        glowingTracerView.update(with: normalizedPoints, color: controller.tracerColor)
         
         // Show yardage view when trajectory is detected
-        if !points.isEmpty {
+        if !normalizedPoints.isEmpty {
             liveYardageView.setVisible(true)
         }
     }
@@ -297,7 +302,7 @@ extension PremiumShotViewController: ShotSessionControllerDelegate {
         liveYardageView.setVisible(false)
         liveYardageView.reset()
         
-        // Present review
+        // Present review screen
         let reviewVC = PremiumReviewViewController(videoURL: url)
         present(reviewVC, animated: true) {
             self.sessionController.state = .ready
@@ -312,58 +317,152 @@ extension PremiumShotViewController: ShotSessionControllerDelegate {
     }
 }
 
-// MARK: - PHPickerViewControllerDelegate
-extension PremiumShotViewController: PHPickerViewControllerDelegate {
+// MARK: - Debug UI (DEBUG builds only)
+
+#if DEBUG
+extension PremiumShotViewController {
     
-    func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
-        picker.dismiss(animated: true)
+    func setupDebugUI() {
+        // Only show prominent test button on simulator (no camera)
+        #if targetEnvironment(simulator)
+        addSimulatorTestUI()
+        #else
+        // On device, just add a subtle debug indicator
+        addDebugIndicator()
+        #endif
+    }
+    
+    private func addSimulatorTestUI() {
+        // Large test mode button for simulator
+        let testButton = UIButton(type: .system)
+        testButton.setTitle("🧪 Open Test Mode", for: .normal)
+        testButton.titleLabel?.font = ShotTracerDesign.Typography.button()
+        testButton.backgroundColor = ShotTracerDesign.Colors.mastersGreen
+        testButton.setTitleColor(.white, for: .normal)
+        testButton.layer.cornerRadius = ShotTracerDesign.CornerRadius.medium
+        testButton.translatesAutoresizingMaskIntoConstraints = false
         
-        guard let provider = results.first?.itemProvider,
-              provider.hasItemConformingToTypeIdentifier("public.movie") else {
-            return
-        }
+        testButton.addTarget(self, action: #selector(openTestMode), for: .touchUpInside)
         
-        provider.loadFileRepresentation(forTypeIdentifier: "public.movie") { [weak self] url, error in
-            if let error = error {
-                DispatchQueue.main.async {
-                    self?.showError(error)
-                }
-                return
+        view.addSubview(testButton)
+        
+        NSLayoutConstraint.activate([
+            testButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            testButton.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            testButton.widthAnchor.constraint(equalToConstant: 200),
+            testButton.heightAnchor.constraint(equalToConstant: 50)
+        ])
+        
+        // Info label
+        let infoLabel = UILabel()
+        infoLabel.text = "Camera not available in Simulator.\nUse Test Mode to verify the tracer."
+        infoLabel.font = ShotTracerDesign.Typography.caption()
+        infoLabel.textColor = ShotTracerDesign.Colors.textSecondary
+        infoLabel.textAlignment = .center
+        infoLabel.numberOfLines = 0
+        infoLabel.translatesAutoresizingMaskIntoConstraints = false
+        
+        view.addSubview(infoLabel)
+        
+        NSLayoutConstraint.activate([
+            infoLabel.topAnchor.constraint(equalTo: testButton.bottomAnchor, constant: 20),
+            infoLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            infoLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 280)
+        ])
+        
+        // Quick load button
+        let quickLoadButton = UIButton(type: .system)
+        quickLoadButton.setTitle("⚡ Quick Load First Video", for: .normal)
+        quickLoadButton.titleLabel?.font = ShotTracerDesign.Typography.buttonSmall()
+        quickLoadButton.backgroundColor = ShotTracerDesign.Colors.surfaceOverlay
+        quickLoadButton.setTitleColor(ShotTracerDesign.Colors.championshipGold, for: .normal)
+        quickLoadButton.layer.cornerRadius = ShotTracerDesign.CornerRadius.small
+        quickLoadButton.translatesAutoresizingMaskIntoConstraints = false
+        
+        quickLoadButton.addTarget(self, action: #selector(quickLoadVideo), for: .touchUpInside)
+        
+        view.addSubview(quickLoadButton)
+        
+        NSLayoutConstraint.activate([
+            quickLoadButton.topAnchor.constraint(equalTo: infoLabel.bottomAnchor, constant: 16),
+            quickLoadButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            quickLoadButton.widthAnchor.constraint(equalToConstant: 200),
+            quickLoadButton.heightAnchor.constraint(equalToConstant: 40)
+        ])
+    }
+    
+    private func addDebugIndicator() {
+        // Small debug indicator on device
+        let debugLabel = UILabel()
+        debugLabel.text = "DEBUG"
+        debugLabel.font = ShotTracerDesign.Typography.small()
+        debugLabel.textColor = ShotTracerDesign.Colors.championshipGold.withAlphaComponent(0.5)
+        debugLabel.translatesAutoresizingMaskIntoConstraints = false
+        
+        view.addSubview(debugLabel)
+        
+        NSLayoutConstraint.activate([
+            debugLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 4),
+            debugLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8)
+        ])
+    }
+    
+    @objc private func openTestMode() {
+        let testVC = TestModeViewController()
+        let nav = UINavigationController(rootViewController: testVC)
+        nav.modalPresentationStyle = .fullScreen
+        present(nav, animated: true)
+    }
+    
+    private func runTestsAutomatically() {
+        print("═══════════════════════════════════════════════════════")
+        print("🧪 AUTO-RUNNING BALL TRACKER TESTS IN SIMULATOR")
+        print("═══════════════════════════════════════════════════════")
+        
+        BallTrackerTests.shared.runAllTests { results in
+            let passed = results.filter { $0.passed }.count
+            let failed = results.filter { !$0.passed }.count
+            
+            print("\n═══════════════════════════════════════════════════════")
+            print("✅ TEST RESULTS: \(passed) passed, \(failed) failed")
+            print("═══════════════════════════════════════════════════════")
+            
+            // Show results in UI
+            DispatchQueue.main.async {
+                let alert = UIAlertController(
+                    title: "Shot Tracer Tests",
+                    message: "\(passed) tests passed\n\(failed) tests failed\n\nSee console for details.",
+                    preferredStyle: .alert
+                )
+                alert.addAction(UIAlertAction(title: "View Test Mode", style: .default) { _ in
+                    self.openTestMode()
+                })
+                alert.addAction(UIAlertAction(title: "OK", style: .cancel))
+                self.present(alert, animated: true)
             }
-            
-            guard let url = url else { return }
-            
-            // Copy to temp directory
-            let tempURL = URL(fileURLWithPath: NSTemporaryDirectory())
-                .appendingPathComponent("import_\(UUID().uuidString).mov")
-            
-            do {
-                try FileManager.default.copyItem(at: url, to: tempURL)
-                DispatchQueue.main.async {
-                    self?.processImportedVideo(url: tempURL)
+        }
+    }
+    
+    @objc private func quickLoadVideo() {
+        TestVideoProcessor.loadFirstVideoFromLibrary { [weak self] asset in
+            if let asset = asset {
+                // Open test mode with this video pre-loaded
+                let testVC = TestModeViewController()
+                let nav = UINavigationController(rootViewController: testVC)
+                nav.modalPresentationStyle = .fullScreen
+                self?.present(nav, animated: true) {
+                    // Could pass the asset to testVC here if needed
                 }
-            } catch {
-                DispatchQueue.main.async {
-                    self?.showError(error)
-                }
+            } else {
+                let alert = UIAlertController(
+                    title: "No Videos Found",
+                    message: "Add a video to the Simulator:\n\n1. Drag a .mov or .mp4 file onto the Simulator window\n2. It will be saved to Photos",
+                    preferredStyle: .alert
+                )
+                alert.addAction(UIAlertAction(title: "OK", style: .default))
+                self?.present(alert, animated: true)
             }
         }
     }
 }
-
-// MARK: - Scene Delegate Update
-// Add this to your SceneDelegate.swift to use PremiumShotViewController as root
-
-/*
- In SceneDelegate.swift, update the scene(_:willConnectTo:options:) method:
- 
- func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
-     guard let windowScene = (scene as? UIWindowScene) else { return }
-     
-     let window = UIWindow(windowScene: windowScene)
-     window.rootViewController = PremiumShotViewController()
-     self.window = window
-     window.makeKeyAndVisible()
- }
- */
-
+#endif

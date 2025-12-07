@@ -281,10 +281,20 @@ final class ShotExporter {
         ballGlowLayer.fillColor = color.withAlphaComponent(0.4).cgColor
 
         if let trajectory = trajectory, !trajectory.points.isEmpty {
-            // Create smooth path using Catmull-Rom spline
-            let viewPoints = trajectory.points.map { point -> CGPoint in
+            // ═══════════════════════════════════════════════════════════════
+            // KEY: Use projectedPoints for smooth arc (same as live view!)
+            // This ensures LIVE TRACER = EXPORTED TRACER
+            // ═══════════════════════════════════════════════════════════════
+            
+            // Use projectedPoints (Vision's predicted full arc) for export
+            // This is the SAME data used for live rendering!
+            let pointsToUse = trajectory.projectedPoints.isEmpty ? trajectory.detectedPoints : trajectory.projectedPoints
+            
+            let viewPoints = pointsToUse.map { point -> CGPoint in
                 CGPoint(x: point.normalized.x * size.width, y: point.normalized.y * size.height)
             }
+            
+            print("   Export using \(trajectory.projectedPoints.isEmpty ? "detected" : "projected") points: \(viewPoints.count)")
             
             let path = createSmoothPath(from: viewPoints)
             let shadowPath = UIBezierPath(cgPath: path.cgPath)

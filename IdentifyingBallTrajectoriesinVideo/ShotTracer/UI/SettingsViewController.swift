@@ -67,6 +67,11 @@ final class SettingsViewController: UIViewController {
         addCalibrationSection()
         addDisplaySection()
         addAboutSection()
+        
+        // Debug section (only in DEBUG builds)
+        #if DEBUG
+        addDebugSection()
+        #endif
     }
     
     // MARK: - Sections
@@ -387,6 +392,64 @@ final class SettingsViewController: UIViewController {
         alert.addAction(UIAlertAction(title: "OK", style: .default))
         present(alert, animated: true)
     }
+    
+    // MARK: - Debug Section (DEBUG builds only)
+    
+    #if DEBUG
+    private func addDebugSection() {
+        let section = createSection(title: "🧪 DEVELOPER TOOLS", subtitle: "Testing tools for development")
+        
+        let testModeButton = createButtonRow(title: "🎬 Test Mode - Load Video", style: .normal) { [weak self] in
+            self?.openTestMode()
+        }
+        
+        let simulatorNote = createInfoRow(title: "Environment", value: isSimulator ? "Simulator" : "Device")
+        
+        section.addArrangedSubview(testModeButton)
+        section.addArrangedSubview(simulatorNote)
+        
+        // Add helpful tips for simulator
+        if isSimulator {
+            let tipLabel = UILabel()
+            tipLabel.text = "💡 Tip: Drag a video file onto the Simulator window to add it to Photos"
+            tipLabel.font = ShotTracerDesign.Typography.caption()
+            tipLabel.textColor = ShotTracerDesign.Colors.textTertiary
+            tipLabel.numberOfLines = 0
+            
+            let tipContainer = UIView()
+            tipContainer.backgroundColor = ShotTracerDesign.Colors.surfaceElevated
+            tipContainer.addSubview(tipLabel)
+            tipLabel.translatesAutoresizingMaskIntoConstraints = false
+            
+            NSLayoutConstraint.activate([
+                tipContainer.heightAnchor.constraint(greaterThanOrEqualToConstant: 50),
+                tipLabel.topAnchor.constraint(equalTo: tipContainer.topAnchor, constant: 12),
+                tipLabel.bottomAnchor.constraint(equalTo: tipContainer.bottomAnchor, constant: -12),
+                tipLabel.leadingAnchor.constraint(equalTo: tipContainer.leadingAnchor, constant: 16),
+                tipLabel.trailingAnchor.constraint(equalTo: tipContainer.trailingAnchor, constant: -16)
+            ])
+            
+            section.addArrangedSubview(tipContainer)
+        }
+        
+        contentStack.addArrangedSubview(section)
+    }
+    
+    private var isSimulator: Bool {
+        #if targetEnvironment(simulator)
+        return true
+        #else
+        return false
+        #endif
+    }
+    
+    private func openTestMode() {
+        let testVC = TestModeViewController()
+        let nav = UINavigationController(rootViewController: testVC)
+        nav.modalPresentationStyle = .fullScreen
+        present(nav, animated: true)
+    }
+    #endif
 }
 
 
