@@ -1,0 +1,23 @@
+{
+  "/Users/seth/TRACER/IdentifyingBallTrajectoriesinVideo/ShotTracer/ImportROIPickerViewController.swift" : {
+    "const-values" : "/Users/seth/TRACER/build/Build/Intermediates.noindex/IdentifyingBallTrajectoriesinVideo.build/Debug-iphonesimulator/IdentifyingBallTrajectoriesinVideo.build/Objects-normal/arm64/ImportROIPickerViewController.swiftconstvalues",
+    "dependencies" : "/Users/seth/TRACER/build/Build/Intermediates.noindex/IdentifyingBallTrajectoriesinVideo.build/Debug-iphonesimulator/IdentifyingBallTrajectoriesinVideo.build/Objects-normal/arm64/ImportROIPickerViewController.d",
+    "diagnostics" : "/Users/seth/TRACER/build/Build/Intermediates.noindex/IdentifyingBallTrajectoriesinVideo.build/Debug-iphonesimulator/IdentifyingBallTrajectoriesinVideo.build/Objects-normal/arm64/ImportROIPickerViewController.dia",
+    "object" : "/Users/seth/TRACER/build/Build/Intermediates.noindex/IdentifyingBallTrajectoriesinVideo.build/Debug-iphonesimulator/IdentifyingBallTrajectoriesinVideo.build/Objects-normal/arm64/ImportROIPickerViewController.o",
+    "swift-dependencies" : "/Users/seth/TRACER/build/Build/Intermediates.noindex/IdentifyingBallTrajectoriesinVideo.build/Debug-iphonesimulator/IdentifyingBallTrajectoriesinVideo.build/Objects-normal/arm64/ImportROIPickerViewController.swiftdeps"
+  },
+  "/Users/seth/TRACER/IdentifyingBallTrajectoriesinVideo/ShotTracer/TrajectoryDetector.swift" : {
+    "const-values" : "/Users/seth/TRACER/build/Build/Intermediates.noindex/IdentifyingBallTrajectoriesinVideo.build/Debug-iphonesimulator/IdentifyingBallTrajectoriesinVideo.build/Objects-normal/arm64/TrajectoryDetector.swiftconstvalues",
+    "dependencies" : "/Users/seth/TRACER/build/Build/Intermediates.noindex/IdentifyingBallTrajectoriesinVideo.build/Debug-iphonesimulator/IdentifyingBallTrajectoriesinVideo.build/Objects-normal/arm64/TrajectoryDetector.d",
+    "diagnostics" : "/Users/seth/TRACER/build/Build/Intermediates.noindex/IdentifyingBallTrajectoriesinVideo.build/Debug-iphonesimulator/IdentifyingBallTrajectoriesinVideo.build/Objects-normal/arm64/TrajectoryDetector.dia",
+    "object" : "/Users/seth/TRACER/build/Build/Intermediates.noindex/IdentifyingBallTrajectoriesinVideo.build/Debug-iphonesimulator/IdentifyingBallTrajectoriesinVideo.build/Objects-normal/arm64/TrajectoryDetector.o",
+    "swift-dependencies" : "/Users/seth/TRACER/build/Build/Intermediates.noindex/IdentifyingBallTrajectoriesinVideo.build/Debug-iphonesimulator/IdentifyingBallTrajectoriesinVideo.build/Objects-normal/arm64/TrajectoryDetector.swiftdeps"
+  },
+  "/Users/seth/TRACER/IdentifyingBallTrajectoriesinVideo/ShotTracer/TrajectoryModel.swift" : {
+    "const-values" : "/Users/seth/TRACER/build/Build/Intermediates.noindex/IdentifyingBallTrajectoriesinVideo.build/Debug-iphonesimulator/IdentifyingBallTrajectoriesinVideo.build/Objects-normal/arm64/TrajectoryModel.swiftconstvalues",
+    "dependencies" : "/Users/seth/TRACER/build/Build/Intermediates.noindex/IdentifyingBallTrajectoriesinVideo.build/Debug-iphonesimulator/IdentifyingBallTrajectoriesinVideo.build/Objects-normal/arm64/TrajectoryModel.d",
+    "diagnostics" : "/Users/seth/TRACER/build/Build/Intermediates.noindex/IdentifyingBallTrajectoriesinVideo.build/Debug-iphonesimulator/IdentifyingBallTrajectoriesinVideo.build/Objects-normal/arm64/TrajectoryModel.dia",
+    "object" : "/Users/seth/TRACER/build/Build/Intermediates.noindex/IdentifyingBallTrajectoriesinVideo.build/Debug-iphonesimulator/IdentifyingBallTrajectoriesinVideo.build/Objects-normal/arm64/TrajectoryModel.o",
+    "swift-dependencies" : "/Users/seth/TRACER/build/Build/Intermediates.noindex/IdentifyingBallTrajectoriesinVideo.build/Debug-iphonesimulator/IdentifyingBallTrajectoriesinVideo.build/Objects-normal/arm64/TrajectoryModel.swiftdeps"
+  }
+}

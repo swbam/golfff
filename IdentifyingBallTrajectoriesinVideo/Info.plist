@@ -21,7 +21,13 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>ボールの軌道特定のために使用します</string>
+	<string>Camera is used to record your swing and track the ball flight.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Microphone is used to capture swing audio during recording.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Used to pick swing videos for tracing.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save your traced shots to your photo library.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -35,8 +41,6 @@
 					<string>Default Configuration</string>
 					<key>UISceneDelegateClassName</key>
 					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
-					<key>UISceneStoryboardFile</key>
-					<string>Main</string>
 				</dict>
 			</array>
 		</dict>
@@ -45,12 +49,12 @@
 	<true/>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
-	<key>UIMainStoryboardFile</key>
-	<string>Main</string>
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
-		<string>armv7</string>
+		<string>arm64</string>
 	</array>
+	<key>MinimumOSVersion</key>
+	<string>14.0</string>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
