@@ -305,18 +305,7 @@ final class AlignmentOverlayView: UIView {
     
     /// Normalized ball position (0-1) based on ball zone indicator
     var normalizedBallPosition: CGPoint {
-        // Ball is at the center of the ball zone indicator
-        let ballCenter = ballZoneIndicator.center
-        return CGPoint(
-            x: ballCenter.x / bounds.width,
-            y: ballCenter.y / bounds.height
-        )
-    }
-    
-    /// The calculated region of interest based on silhouette positions
-    var detectionROI: CGRect {
-        // The ROI is the area where the ball will be launched from
-        // Based on the ball position between the two silhouettes
+        // Infer ball position from silhouettes (between their feet) rather than a separate marker
         let leftBall = leftSilhouette.convert(
             CGPoint(
                 x: leftSilhouette.bounds.width * leftSilhouette.ballPosition.x,
@@ -332,18 +321,25 @@ final class AlignmentOverlayView: UIView {
             to: self
         )
         
-        // Create ROI centered between ball positions, extending upward for trajectory
-        let centerX = (leftBall.x + rightBall.x) / 2
-        
-        let roiWidth = bounds.width * 0.6
-        let roiHeight = bounds.height * 0.7
-        
-        return CGRect(
-            x: (centerX - roiWidth / 2) / bounds.width,
-            y: 0.1, // Start from near top
-            width: roiWidth / bounds.width,
-            height: roiHeight / bounds.height
-        )
+        let center = CGPoint(x: (leftBall.x + rightBall.x) / 2, y: (leftBall.y + rightBall.y) / 2)
+        return CGPoint(x: center.x / bounds.width, y: center.y / bounds.height)
+    }
+    
+    /// The calculated region of interest based on silhouette positions
+    var detectionROI: CGRect {
+        // Anchor ROI on the ball zone indicator so Vision starts exactly where we expect launch
+        let ball = normalizedBallPosition
+
+        let roiWidth: CGFloat = 0.55
+        let roiHeight: CGFloat = 0.85
+
+        let paddedX = max(0, min(ball.x - roiWidth / 2, 1 - roiWidth))
+        // Lift ROI upward from ball while keeping it inside bounds
+        let proposedY = max(0, ball.y - 0.5)
+        let height = min(roiHeight, 1 - proposedY - 0.02)
+        let paddedY = max(0, min(proposedY, 1 - height))
+
+        return CGRect(x: paddedX, y: paddedY, width: roiWidth, height: height)
     }
     
     override init(frame: CGRect) {
@@ -465,4 +461,3 @@ final class AlignmentOverlayView: UIView {
         instructionLabel.text = aligned ? "✓ Aligned! Tap Record when ready" : "Position yourself within the guides"
     }
 }
-

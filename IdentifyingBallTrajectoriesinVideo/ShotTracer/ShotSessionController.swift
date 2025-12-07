@@ -80,7 +80,7 @@ final class ShotSessionController: NSObject {
     private var recordedURL: URL?
     private var finalTrajectory: Trajectory?
     private var finalMetrics: ShotMetrics?
-    private(set) var tracerColor: UIColor = ShotTracerDesign.Colors.tracerGold
+    private(set) var tracerColor: UIColor = ShotTracerDesign.Colors.tracerRed
     
     /// Debug logging
     var debugLogging = true
@@ -171,6 +171,7 @@ final class ShotSessionController: NSObject {
         highFrameRateTracker?.frameRate = cameraManager.currentFrameRate
         highFrameRateTracker?.debugLogging = debugLogging
         highFrameRateTracker?.setInitialBallPosition(ballPosition)
+        trajectoryDetector.expectedBallStartNormalized = ballPosition
         
         if #available(iOS 15.0, *) {
             liveShotDetector.lockPosition(ballPosition: ballPosition)

@@ -20,6 +20,11 @@ final class TrajectoryDetector {
     /// Region of interest for detection (Vision coordinates: origin bottom-left)
     var regionOfInterest: CGRect?
     
+    /// Expected launch point in UIKit-normalized coords (from alignment)
+    var expectedBallStartNormalized: CGPoint? {
+        didSet { trajectoryStore.expectedStartNormalized = expectedBallStartNormalized }
+    }
+    
     /// Video orientation
     var orientation: CGImagePropertyOrientation = .right
     
@@ -100,9 +105,8 @@ final class TrajectoryDetector {
             if let roi = self.regionOfInterest {
                 self.request.regionOfInterest = roi
             } else {
-                // Default: focus on upper portion where ball flies
-                // Vision coordinates: origin bottom-left, Y increases upward
-                self.request.regionOfInterest = CGRect(x: 0.0, y: 0.1, width: 1.0, height: 0.9)
+                // Default: full frame for robustness in debug/test videos
+                self.request.regionOfInterest = CGRect(x: 0.0, y: 0.0, width: 1.0, height: 1.0)
             }
 
             do {
@@ -152,7 +156,7 @@ final class TrajectoryDetector {
         
         let request = VNDetectTrajectoriesRequest(
             frameAnalysisSpacing: frameAnalysisSpacing,
-            trajectoryLength: 10  // Mizuno's proven value for golf
+            trajectoryLength: 8  // Slightly shorter to trigger sooner in low-contrast/night footage
         ) { [weak self] req, error in
             guard let self = self else { return }
             if let error = error {
@@ -184,20 +188,21 @@ final class TrajectoryDetector {
         // This is what Mizuno does and it WORKS
         
         // Option 2: Set wide range for golf balls
-        // Uncomment these if you get false positives from large objects:
-        // request.objectMinimumNormalizedRadius = 0.001  // Very small ball at distance
-        // request.objectMaximumNormalizedRadius = 0.05   // Large with motion blur
+        // Night/low contrast needs a wider net
+        request.objectMinimumNormalizedRadius = 0.001  // very small distant ball
+        request.objectMaximumNormalizedRadius = 0.12   // allow larger/motion-blurred blobs
         
         // Target frame time for real-time processing (iOS 15+)
         if #available(iOS 15.0, *) {
-            request.targetFrameTime = CMTime(value: 1, timescale: 60)
+            // Let Vision keep up with 120–240 fps feeds while still analyzing every frame
+            request.targetFrameTime = CMTime(value: 1, timescale: 240)
         }
         
         if debugLogging {
             print("📐 Vision Request Configured:")
             print("   Trajectory length: 10 frames")
             print("   Frame spacing: \(frameAnalysisSpacing.seconds)s")
-            print("   Size filtering: DEFAULT (permissive)")
+            print("   Size filtering: 0.003 - 0.08 (golf tuned)")
         }
         
         return request

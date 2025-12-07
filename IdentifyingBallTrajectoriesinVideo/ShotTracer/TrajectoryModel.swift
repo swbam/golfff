@@ -133,6 +133,8 @@ struct Trajectory {
 /// Stores trajectory data that can be used for BOTH live rendering AND video export
 /// This ensures live tracer EXACTLY matches exported tracer
 final class TrajectoryStore {
+    /// Expected ball launch position in UIKit-normalized coords (from alignment overlay)
+    var expectedStartNormalized: CGPoint?
     
     /// All detected trajectories keyed by UUID
     private var trajectories: [UUID: Trajectory] = [:]
@@ -154,29 +156,14 @@ final class TrajectoryStore {
         missingFrameCounts[uuid] = 0
         
         // Convert detected points (Vision bottom-left → UIKit top-left)
-        let detected = observation.detectedPoints.map { point in
-            TrajectoryPoint(
-                time: CMTime(seconds: observation.timeRange.start.seconds, preferredTimescale: 600),
-                normalized: CGPoint(x: CGFloat(point.x), y: 1.0 - CGFloat(point.y))
-            )
-        }
-        
-        // Convert projected points (Vision's predicted full arc)
-        let projected = observation.projectedPoints.map { point in
-            TrajectoryPoint(
-                time: CMTime(seconds: observation.timeRange.start.seconds, preferredTimescale: 600),
-                normalized: CGPoint(x: CGFloat(point.x), y: 1.0 - CGFloat(point.y))
-            )
-        }
+        let detected = convert(observation.detectedPoints, timeRange: observation.timeRange)
+        let projected = convert(observation.projectedPoints, timeRange: observation.timeRange)
         
         if var existing = trajectories[uuid] {
-            // Merge with existing trajectory
-            // Append new detected points
-            if let lastDetected = detected.last {
-                existing.detectedPoints.append(lastDetected)
-            }
-            // Update projected points (use latest prediction)
-            existing.projectedPoints = projected
+            // Merge with existing trajectory (dedupe + sort by time)
+            existing.detectedPoints = merge(existing.detectedPoints, with: detected)
+            // Always keep the latest projected curve from Vision
+            existing.projectedPoints = merge(existing.projectedPoints, with: projected, replaceExisting: true)
             existing.equationCoefficients = observation.equationCoefficients
             existing.confidence = max(existing.confidence, observation.confidence)
             existing.timeRange = observation.timeRange
@@ -214,11 +201,17 @@ final class TrajectoryStore {
     private func updatePrimaryTrajectory() {
         // Select trajectory with highest confidence and most points
         primaryTrajectory = trajectories.values
-            .filter { $0.isValidGolfTrajectory }
+            .filter { trajectory in
+                guard trajectory.isValidGolfTrajectory else { return false }
+                // If we know the expected start, drop wildly off-target trajectories early
+                if let expected = expectedStartNormalized,
+                   let start = trajectory.detectedPoints.first?.normalized ?? trajectory.projectedPoints.first?.normalized {
+                    return start.distance(to: expected) <= 0.45
+                }
+                return true
+            }
             .max { a, b in
-                let scoreA = a.confidence + Float(a.detectedPoints.count) * 0.1
-                let scoreB = b.confidence + Float(b.detectedPoints.count) * 0.1
-                return scoreA < scoreB
+                score(for: a) < score(for: b)
             }
     }
     
@@ -238,5 +231,47 @@ final class TrajectoryStore {
     /// Get all active trajectories
     var allTrajectories: [Trajectory] {
         Array(trajectories.values)
+    }
+
+    // MARK: - Helpers
+
+    /// Convert Vision-normalized points to UIKit-normalized points and spread timestamps across the observation's timeRange.
+    private func convert(_ points: [VNPoint], timeRange: CMTimeRange) -> [TrajectoryPoint] {
+        guard !points.isEmpty else { return [] }
+
+        let duration = timeRange.duration.seconds
+        let step = (points.count > 1 && duration > 0) ? duration / Double(points.count - 1) : 0
+
+        return points.enumerated().map { index, point in
+            let time = CMTime(seconds: timeRange.start.seconds + (Double(index) * step), preferredTimescale: 600)
+            let uiPoint = CGPoint(x: CGFloat(point.x), y: 1.0 - CGFloat(point.y))
+            return TrajectoryPoint(time: time, normalized: uiPoint)
+        }
+    }
+
+    /// Merge point arrays while keeping them time-sorted and de-duplicated.
+    private func merge(_ existing: [TrajectoryPoint], with newPoints: [TrajectoryPoint], replaceExisting: Bool = false) -> [TrajectoryPoint] {
+        var combined = replaceExisting ? [] : existing
+        for point in newPoints {
+            if !combined.contains(where: { abs($0.time.seconds - point.time.seconds) < 0.0005 && $0.normalized == point.normalized }) {
+                combined.append(point)
+            }
+        }
+        return combined.sorted { $0.time < $1.time }
+    }
+
+    private func score(for trajectory: Trajectory) -> Float {
+        let base = trajectory.confidence
+        let volume = Float(trajectory.detectedPoints.count) * 0.08 + Float(trajectory.projectedPoints.count) * 0.02
+
+        var startBoost: Float = 0
+        if let expected = expectedStartNormalized,
+           let start = trajectory.detectedPoints.first?.normalized ?? trajectory.projectedPoints.first?.normalized {
+            let distance = start.distance(to: expected)
+            // Favor trajectories that start close to expected ball location
+            startBoost = max(0, 1 - Float(distance * 2.2)) // distance 0 → 1, ~0.45 → 0
+        }
+
+        return base + volume + startBoost
     }
 }

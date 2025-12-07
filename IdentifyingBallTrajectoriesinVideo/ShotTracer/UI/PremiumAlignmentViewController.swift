@@ -1,5 +1,6 @@
 import UIKit
 import AVFoundation
+import CoreGraphics
 
 /// Result of alignment - includes ROI and ball position
 struct AlignmentResult {
@@ -177,14 +178,15 @@ final class PremiumAlignmentViewController: UIViewController {
         view.layoutIfNeeded()
         
         // Get ROI from the alignment overlay
-        let roi = alignmentOverlay.detectionROI
+        let uiKitROI = alignmentOverlay.detectionROI.clamped
+        let visionROI = CoordinateConverter.uiKitToVision(uiKitROI).clamped
         
         // Ensure valid bounds
         return CGRect(
-            x: max(0, min(1, roi.origin.x)),
-            y: max(0, min(1, roi.origin.y)),
-            width: max(0.1, min(1, roi.width)),
-            height: max(0.1, min(1, roi.height))
+            x: max(0, min(1, visionROI.origin.x)),
+            y: max(0, min(1, visionROI.origin.y)),
+            width: max(0.1, min(1, visionROI.width)),
+            height: max(0.1, min(1, visionROI.height))
         )
     }
     
