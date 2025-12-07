@@ -149,7 +149,7 @@ final class TrajectoryOverlayView: UIView {
             // Calculate control points
             let d1 = distance(p0, p1)
             let d2 = distance(p1, p2)
-            let d3 = distance(p2, p3)
+            _ = distance(p2, p3)  // d3 - available for extended spline calculations
             
             var b1: CGPoint
             var b2: CGPoint

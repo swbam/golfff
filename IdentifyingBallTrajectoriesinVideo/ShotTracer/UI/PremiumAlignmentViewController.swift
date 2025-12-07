@@ -10,6 +10,11 @@ struct AlignmentResult {
 
 // MARK: - Premium Alignment View Controller
 /// SmoothSwing-style alignment with dual golfer silhouettes
+/// 
+/// NEW: Automatic lock-in with body pose detection!
+/// - Uses VNDetectHumanBodyPoseRequest to detect golfer stance
+/// - Automatically locks in when golfer is properly positioned
+/// - Haptic feedback provides progress and confirmation
 final class PremiumAlignmentViewController: UIViewController {
     
     // MARK: - Properties
@@ -23,6 +28,8 @@ final class PremiumAlignmentViewController: UIViewController {
     private let titleLabel = UILabel()
     private let instructionLabel = UILabel()
     private let skipButton = UIButton(type: .system)
+    private let alignmentStatusLabel = UILabel()
+    private let alignmentProgressView = UIProgressView(progressViewStyle: .default)
     
     // Gradient overlay for better visibility
     private let topGradient = CAGradientLayer()
@@ -30,6 +37,11 @@ final class PremiumAlignmentViewController: UIViewController {
     
     // Animation state
     private var hasAnimatedIn = false
+    
+    // Automatic alignment detection (iOS 14+)
+    private var alignmentDetector: GolferAlignmentDetector?
+    private var videoDataOutput: AVCaptureVideoDataOutput?
+    private let detectionQueue = DispatchQueue(label: "com.tracer.alignment", qos: .userInteractive)
     
     // MARK: - Init
     init(session: AVCaptureSession, onLockIn: @escaping (AlignmentResult) -> Void) {
@@ -40,10 +52,23 @@ final class PremiumAlignmentViewController: UIViewController {
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = .overFullScreen
         modalTransitionStyle = .crossDissolve
+        
+        // Setup automatic alignment detection
+        if #available(iOS 14.0, *) {
+            setupAlignmentDetection(session: session)
+        }
     }
     
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+    
+    deinit {
+        // Remove video output when done
+        if let output = videoDataOutput,
+           let session = previewView.videoPreviewLayer.session {
+            session.removeOutput(output)
+        }
     }
     
     // MARK: - Lifecycle
@@ -93,12 +118,27 @@ final class PremiumAlignmentViewController: UIViewController {
         
         // Instructions
         instructionLabel.translatesAutoresizingMaskIntoConstraints = false
-        instructionLabel.text = "Position yourself between the silhouettes.\nPlace the ball in the circle below.\nThe arrow shows where the ball will fly."
+        instructionLabel.text = "Position yourself between the silhouettes.\nHold still - auto-lock when aligned!"
         instructionLabel.font = ShotTracerDesign.Typography.body()
         instructionLabel.textColor = ShotTracerDesign.Colors.textSecondary
         instructionLabel.textAlignment = .center
         instructionLabel.numberOfLines = 0
         instructionCard.addSubview(instructionLabel)
+        
+        // Alignment status
+        alignmentStatusLabel.translatesAutoresizingMaskIntoConstraints = false
+        alignmentStatusLabel.text = "Looking for golfer..."
+        alignmentStatusLabel.font = ShotTracerDesign.Typography.captionMedium()
+        alignmentStatusLabel.textColor = .gray
+        alignmentStatusLabel.textAlignment = .center
+        instructionCard.addSubview(alignmentStatusLabel)
+        
+        // Alignment progress
+        alignmentProgressView.translatesAutoresizingMaskIntoConstraints = false
+        alignmentProgressView.progress = 0
+        alignmentProgressView.tintColor = ShotTracerDesign.Colors.mastersGreen
+        alignmentProgressView.trackTintColor = UIColor.white.withAlphaComponent(0.2)
+        instructionCard.addSubview(alignmentProgressView)
         
         // Lock button
         lockButton.translatesAutoresizingMaskIntoConstraints = false
@@ -142,7 +182,17 @@ final class PremiumAlignmentViewController: UIViewController {
             instructionLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: ShotTracerDesign.Spacing.sm),
             instructionLabel.leadingAnchor.constraint(equalTo: instructionCard.leadingAnchor, constant: ShotTracerDesign.Spacing.md),
             instructionLabel.trailingAnchor.constraint(equalTo: instructionCard.trailingAnchor, constant: -ShotTracerDesign.Spacing.md),
-            instructionLabel.bottomAnchor.constraint(equalTo: instructionCard.bottomAnchor, constant: -ShotTracerDesign.Spacing.md),
+            
+            // Alignment status
+            alignmentStatusLabel.topAnchor.constraint(equalTo: instructionLabel.bottomAnchor, constant: ShotTracerDesign.Spacing.md),
+            alignmentStatusLabel.leadingAnchor.constraint(equalTo: instructionCard.leadingAnchor, constant: ShotTracerDesign.Spacing.md),
+            alignmentStatusLabel.trailingAnchor.constraint(equalTo: instructionCard.trailingAnchor, constant: -ShotTracerDesign.Spacing.md),
+            
+            // Alignment progress bar
+            alignmentProgressView.topAnchor.constraint(equalTo: alignmentStatusLabel.bottomAnchor, constant: ShotTracerDesign.Spacing.sm),
+            alignmentProgressView.leadingAnchor.constraint(equalTo: instructionCard.leadingAnchor, constant: ShotTracerDesign.Spacing.lg),
+            alignmentProgressView.trailingAnchor.constraint(equalTo: instructionCard.trailingAnchor, constant: -ShotTracerDesign.Spacing.lg),
+            alignmentProgressView.bottomAnchor.constraint(equalTo: instructionCard.bottomAnchor, constant: -ShotTracerDesign.Spacing.md),
             
             // Lock button
             lockButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
@@ -171,6 +221,92 @@ final class PremiumAlignmentViewController: UIViewController {
         ]
         bottomGradient.locations = [0, 1]
         view.layer.insertSublayer(bottomGradient, above: previewView.layer)
+    }
+    
+    // MARK: - Automatic Alignment Detection
+    
+    @available(iOS 14.0, *)
+    private func setupAlignmentDetection(session: AVCaptureSession) {
+        alignmentDetector = GolferAlignmentDetector()
+        alignmentDetector?.debugLogging = false
+        
+        // Setup callbacks
+        alignmentDetector?.onAlignmentChanged = { [weak self] result in
+            DispatchQueue.main.async {
+                self?.updateAlignmentUI(result: result)
+            }
+        }
+        
+        alignmentDetector?.onLockedIn = { [weak self] result in
+            DispatchQueue.main.async {
+                self?.handleAutoLockIn(result: result)
+            }
+        }
+        
+        // Note: We'll reuse frames from the main camera manager
+        // The alignment is handled by ShotSessionController calling the detector
+    }
+    
+    @available(iOS 14.0, *)
+    private func updateAlignmentUI(result: GolferAlignmentDetector.AlignmentResult) {
+        // Update status label
+        alignmentStatusLabel.text = result.state.displayName
+        alignmentStatusLabel.textColor = result.state.color
+        
+        // Update progress bar
+        UIView.animate(withDuration: 0.15) {
+            self.alignmentProgressView.progress = result.alignmentScore
+            self.alignmentProgressView.tintColor = result.state.color
+        }
+        
+        // Update overlay colors based on alignment
+        let isAligning = result.state == .aligning || result.state == .locked
+        alignmentOverlay.setAligned(isAligning)
+        
+        // Update button state
+        if result.state == .locked {
+            lockButton.setTitle("✓ Locked In!", for: .normal)
+        } else if result.isInGolfStance {
+            lockButton.setTitle("🎯 Hold Still...", for: .normal)
+        } else {
+            lockButton.setTitle("🎯 Lock In Position", for: .normal)
+        }
+    }
+    
+    @available(iOS 14.0, *)
+    private func handleAutoLockIn(result: GolferAlignmentDetector.AlignmentResult) {
+        // Auto-lock successful!
+        alignmentOverlay.setAligned(true)
+        
+        // Flash effect
+        let flash = UIView(frame: view.bounds)
+        flash.backgroundColor = ShotTracerDesign.Colors.mastersGreen
+        flash.alpha = 0
+        view.addSubview(flash)
+        
+        UIView.animateKeyframes(withDuration: 0.5, delay: 0, options: []) {
+            UIView.addKeyframe(withRelativeStartTime: 0, relativeDuration: 0.2) {
+                flash.alpha = 0.4
+            }
+            UIView.addKeyframe(withRelativeStartTime: 0.2, relativeDuration: 0.8) {
+                flash.alpha = 0
+            }
+        } completion: { _ in
+            flash.removeFromSuperview()
+            
+            let roi = self.computeVisionROI()
+            let ballPos = result.ballPosition ?? self.alignmentOverlay.normalizedBallPosition
+            let alignResult = AlignmentResult(roi: roi, ballPosition: ballPos)
+            
+            print("🔒 AUTO-LOCKED!")
+            print("   ROI: \(roi)")
+            print("   Ball: (\(String(format: "%.3f", ballPos.x)), \(String(format: "%.3f", ballPos.y)))")
+            
+            self.animateOut {
+                self.onLockIn(alignResult)
+                self.dismiss(animated: false)
+            }
+        }
     }
     
     // MARK: - ROI Computation

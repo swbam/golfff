@@ -3,6 +3,7 @@ import UIKit
 
 protocol CameraManagerDelegate: AnyObject {
     func cameraManager(_ manager: CameraManager, didOutput sampleBuffer: CMSampleBuffer)
+    func cameraManager(_ manager: CameraManager, didOutputAudio sampleBuffer: CMSampleBuffer)
     func cameraManager(_ manager: CameraManager, didFinishRecordingTo url: URL)
     func cameraManager(_ manager: CameraManager, didFail error: Error)
     func cameraManagerDidConfigure(_ manager: CameraManager, success: Bool)
@@ -11,6 +12,7 @@ protocol CameraManagerDelegate: AnyObject {
 // Default implementation for optional methods
 extension CameraManagerDelegate {
     func cameraManagerDidConfigure(_ manager: CameraManager, success: Bool) {}
+    func cameraManager(_ manager: CameraManager, didOutputAudio sampleBuffer: CMSampleBuffer) {}
 }
 
 enum CameraError: LocalizedError {
@@ -47,6 +49,10 @@ enum CameraError: LocalizedError {
 /// - Smaller search window needed
 /// 
 /// Then we export at 30fps - trajectory timestamps still match!
+///
+/// REAL-TIME COMPOSITING MODE:
+/// When useRealTimeCompositing is true, this manager delegates recording
+/// to RealTimeRecordingManager which writes composited frames directly.
 final class CameraManager: NSObject {
     weak var delegate: CameraManagerDelegate?
 
@@ -54,8 +60,10 @@ final class CameraManager: NSObject {
     private let session = AVCaptureSession()
     private let sessionQueue = DispatchQueue(label: "com.shottracer.session")
     private let videoOutput = AVCaptureVideoDataOutput()
+    private let audioOutput = AVCaptureAudioDataOutput()
     private let movieOutput = AVCaptureMovieFileOutput()
     private let videoQueue = DispatchQueue(label: "com.shottracer.vision", qos: .userInteractive)
+    private let audioQueue = DispatchQueue(label: "com.shottracer.audio", qos: .userInteractive)
 
     private(set) var isRecording = false
     private(set) var isConfigured = false
@@ -69,6 +77,19 @@ final class CameraManager: NSObject {
     
     /// Export frame rate (30fps standard)
     let exportFrameRate: Double = 30
+    
+    /// Use real-time compositing mode (tracer baked into recording)
+    var useRealTimeCompositing: Bool = true
+    
+    /// Real-time recording manager (used when useRealTimeCompositing is true)
+    var realTimeRecordingManager: RealTimeRecordingManager?
+    
+    /// Video dimensions (for RealTimeRecordingManager configuration)
+    private(set) var videoWidth: Int = 1920
+    private(set) var videoHeight: Int = 1080
+    
+    /// Video transform for correct orientation
+    private(set) var videoTransform: CGAffineTransform = .identity
 
     init(previewView: PreviewView = PreviewView()) {
         self.previewView = previewView
@@ -170,14 +191,39 @@ final class CameraManager: NSObject {
                 self.videoOutput.setSampleBufferDelegate(self, queue: self.videoQueue)
                 self.videoOutput.alwaysDiscardsLateVideoFrames = false  // Don't discard - we need all frames!
                 self.videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+                
+                // Get video dimensions for real-time compositing
+                if let connection = self.videoOutput.connection(with: .video) {
+                    let dimensions = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
+                    
+                    // Account for portrait orientation
+                    if connection.videoOrientation == .portrait || connection.videoOrientation == .portraitUpsideDown {
+                        self.videoWidth = Int(dimensions.height)
+                        self.videoHeight = Int(dimensions.width)
+                        self.videoTransform = CGAffineTransform(rotationAngle: .pi / 2)
+                    } else {
+                        self.videoWidth = Int(dimensions.width)
+                        self.videoHeight = Int(dimensions.height)
+                        self.videoTransform = .identity
+                    }
+                }
+                
                 print("✅ Video output added (high frame rate)")
+                print("   Dimensions: \(self.videoWidth)x\(self.videoHeight)")
+            }
+            
+            // Add audio output for real-time recording
+            if self.session.canAddOutput(self.audioOutput) {
+                self.session.addOutput(self.audioOutput)
+                self.audioOutput.setSampleBufferDelegate(self, queue: self.audioQueue)
+                print("✅ Audio output added")
             }
 
-            // Add movie output for recording
+            // Add movie output for recording (fallback when not using real-time compositing)
             if self.session.canAddOutput(self.movieOutput) {
                 self.session.addOutput(self.movieOutput)
                 self.movieOutput.movieFragmentInterval = .invalid
-                print("✅ Movie output added")
+                print("✅ Movie output added (fallback)")
             }
 
             self.session.commitConfiguration()
@@ -354,14 +400,46 @@ final class CameraManager: NSObject {
             guard !self.isRecording else { return }
             
             self.isRecording = true
-            let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
-            let fileURL = tempDir.appendingPathComponent("shot_\(UUID().uuidString).mov")
-            self.movieOutput.startRecording(to: fileURL, recordingDelegate: self)
             
-            print("═══════════════════════════════════════")
-            print("🎬 RECORDING STARTED @ \(self.currentFrameRate) fps")
-            print("   Output: \(fileURL.lastPathComponent)")
-            print("═══════════════════════════════════════")
+            if self.useRealTimeCompositing, let recorder = self.realTimeRecordingManager {
+                // REAL-TIME COMPOSITING MODE
+                // Configure and start the real-time recording manager
+                recorder.configureVideo(
+                    width: self.videoWidth,
+                    height: self.videoHeight,
+                    frameRate: Float(min(self.currentFrameRate, 60)),  // Export at max 60fps
+                    transform: self.videoTransform
+                )
+                recorder.configureAudio()
+                
+                do {
+                    try recorder.startRecording()
+                    
+                    print("═══════════════════════════════════════")
+                    print("🎬 REAL-TIME COMPOSITING RECORDING STARTED")
+                    print("   Capture: \(self.currentFrameRate) fps")
+                    print("   Export: \(min(self.currentFrameRate, 60)) fps")
+                    print("   Tracer: LIVE = EXPORT ✓")
+                    print("═══════════════════════════════════════")
+                    
+                } catch {
+                    print("❌ Real-time recording failed: \(error)")
+                    self.isRecording = false
+                    DispatchQueue.main.async {
+                        self.delegate?.cameraManager(self, didFail: error)
+                    }
+                }
+            } else {
+                // FALLBACK: Use AVCaptureMovieFileOutput (requires post-processing)
+                let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
+                let fileURL = tempDir.appendingPathComponent("shot_\(UUID().uuidString).mov")
+                self.movieOutput.startRecording(to: fileURL, recordingDelegate: self)
+                
+                print("═══════════════════════════════════════")
+                print("🎬 RECORDING STARTED (fallback mode) @ \(self.currentFrameRate) fps")
+                print("   Output: \(fileURL.lastPathComponent)")
+                print("═══════════════════════════════════════")
+            }
         }
     }
 
@@ -369,8 +447,16 @@ final class CameraManager: NSObject {
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
             guard self.isRecording else { return }
-            self.movieOutput.stopRecording()
-            print("🎬 Recording stopped")
+            
+            if self.useRealTimeCompositing, let recorder = self.realTimeRecordingManager {
+                // Stop real-time recording
+                recorder.stopRecording()
+                print("🎬 Real-time recording stopped")
+            } else {
+                // Stop movie file recording
+                self.movieOutput.stopRecording()
+                print("🎬 Recording stopped")
+            }
         }
     }
     
@@ -380,15 +466,22 @@ final class CameraManager: NSObject {
     }
 }
 
-extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
+extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        // Every frame at high frame rate!
-        delegate?.cameraManager(self, didOutput: sampleBuffer)
+        if output == videoOutput {
+            // Every video frame at high frame rate!
+            delegate?.cameraManager(self, didOutput: sampleBuffer)
+        } else if output == audioOutput {
+            // Audio samples
+            delegate?.cameraManager(self, didOutputAudio: sampleBuffer)
+        }
     }
     
     func captureOutput(_ output: AVCaptureOutput, didDrop sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         // Log dropped frames - shouldn't happen often
-        print("⚠️ Dropped frame")
+        if output == videoOutput {
+            print("⚠️ Dropped video frame")
+        }
     }
 }
 
@@ -409,6 +502,27 @@ extension CameraManager: AVCaptureFileOutputRecordingDelegate {
                     self.delegate?.cameraManager(self, didFinishRecordingTo: outputFileURL)
                 }
             }
+        }
+    }
+}
+
+// MARK: - Real-Time Recording Support
+
+extension CameraManager {
+    /// Setup real-time recording manager callbacks
+    func setupRealTimeRecording(manager: RealTimeRecordingManager) {
+        self.realTimeRecordingManager = manager
+        
+        manager.onRecordingFinished = { [weak self] url in
+            guard let self = self else { return }
+            self.isRecording = false
+            self.delegate?.cameraManager(self, didFinishRecordingTo: url)
+        }
+        
+        manager.onRecordingFailed = { [weak self] error in
+            guard let self = self else { return }
+            self.isRecording = false
+            self.delegate?.cameraManager(self, didFail: error)
         }
     }
 }

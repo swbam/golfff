@@ -37,6 +37,9 @@
 		TVP001001 /* TestVideoProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = TVP001002 /* TestVideoProcessor.swift */; };
 		TVM001001 /* TestModeViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = TVM001002 /* TestModeViewController.swift */; };
 		BTT001001 /* BallTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BTT001002 /* BallTrackerTests.swift */; };
+		RTC001001 /* RealTimeCompositor.swift in Sources */ = {isa = PBXBuildFile; fileRef = RTC001002 /* RealTimeCompositor.swift */; };
+		RTR001001 /* RealTimeRecordingManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = RTR001002 /* RealTimeRecordingManager.swift */; };
+		GAD001001 /* GolferAlignmentDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = GAD001002 /* GolferAlignmentDetector.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -76,6 +79,9 @@
 		TVP001002 /* TestVideoProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestVideoProcessor.swift; sourceTree = "<group>"; };
 		TVM001002 /* TestModeViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestModeViewController.swift; sourceTree = "<group>"; };
 		BTT001002 /* BallTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BallTrackerTests.swift; sourceTree = "<group>"; };
+		RTC001002 /* RealTimeCompositor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealTimeCompositor.swift; sourceTree = "<group>"; };
+		RTR001002 /* RealTimeRecordingManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealTimeRecordingManager.swift; sourceTree = "<group>"; };
+		GAD001002 /* GolferAlignmentDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GolferAlignmentDetector.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -103,6 +109,9 @@
 				LSD001002 /* LiveShotDetector.swift */,
 				HFR001002 /* HighFrameRateBallTracker.swift */,
 				CRD001002 /* CoordinateUtilities.swift */,
+				RTC001002 /* RealTimeCompositor.swift */,
+				RTR001002 /* RealTimeRecordingManager.swift */,
+				GAD001002 /* GolferAlignmentDetector.swift */,
 			);
 			path = ShotTracer;
 			sourceTree = "<group>";
@@ -277,6 +286,9 @@
 				TVP001001 /* TestVideoProcessor.swift in Sources */,
 				TVM001001 /* TestModeViewController.swift in Sources */,
 				BTT001001 /* BallTrackerTests.swift in Sources */,
+				RTC001001 /* RealTimeCompositor.swift in Sources */,
+				RTR001001 /* RealTimeRecordingManager.swift in Sources */,
+				GAD001001 /* GolferAlignmentDetector.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

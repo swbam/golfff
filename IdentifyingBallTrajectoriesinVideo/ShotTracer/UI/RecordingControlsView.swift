@@ -5,6 +5,7 @@ protocol RecordingControlsDelegate: AnyObject {
     func recordingControlsDidTapRecord(_ controls: RecordingControlsView)
     func recordingControlsDidTapSettings(_ controls: RecordingControlsView)
     func recordingControlsDidTapRealign(_ controls: RecordingControlsView)
+    func recordingControlsDidTapImport(_ controls: RecordingControlsView)
     func recordingControls(_ controls: RecordingControlsView, didSelectColor color: UIColor)
     func recordingControls(_ controls: RecordingControlsView, didSelectStyle style: TracerStyle)
 }
@@ -41,6 +42,7 @@ final class RecordingControlsView: UIView {
     private let statusLabel = UILabel()
     private let timerLabel = UILabel()
     private let settingsButton = UIButton(type: .system)
+    private let importButton = UIButton(type: .system)
     
     private let bottomBar = GlassmorphicView()
     private let recordButton = RecordButton()
@@ -97,6 +99,14 @@ final class RecordingControlsView: UIView {
         settingsButton.addTarget(self, action: #selector(settingsTapped), for: .touchUpInside)
         topBar.addSubview(settingsButton)
         
+        // Import button (load video from Photos)
+        importButton.translatesAutoresizingMaskIntoConstraints = false
+        let importConfig = UIImage.SymbolConfiguration(pointSize: 20, weight: .medium)
+        importButton.setImage(UIImage(systemName: "photo.on.rectangle.angled", withConfiguration: importConfig), for: .normal)
+        importButton.tintColor = ShotTracerDesign.Colors.championshipGold
+        importButton.addTarget(self, action: #selector(importTapped), for: .touchUpInside)
+        topBar.addSubview(importButton)
+        
         NSLayoutConstraint.activate([
             topBar.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: ShotTracerDesign.Spacing.sm),
             topBar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: ShotTracerDesign.Spacing.md),
@@ -108,6 +118,12 @@ final class RecordingControlsView: UIView {
             
             timerLabel.centerXAnchor.constraint(equalTo: topBar.centerXAnchor),
             timerLabel.centerYAnchor.constraint(equalTo: topBar.centerYAnchor),
+            
+            // Import button before settings
+            importButton.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: -ShotTracerDesign.Spacing.sm),
+            importButton.centerYAnchor.constraint(equalTo: topBar.centerYAnchor),
+            importButton.widthAnchor.constraint(equalToConstant: 44),
+            importButton.heightAnchor.constraint(equalToConstant: 44),
             
             settingsButton.trailingAnchor.constraint(equalTo: topBar.trailingAnchor, constant: -ShotTracerDesign.Spacing.md),
             settingsButton.centerYAnchor.constraint(equalTo: topBar.centerYAnchor),
@@ -195,6 +211,9 @@ final class RecordingControlsView: UIView {
             
             self.settingsButton.alpha = self.isRecording ? 0.3 : 1.0
             self.settingsButton.isUserInteractionEnabled = !self.isRecording
+            
+            self.importButton.alpha = self.isRecording ? 0.3 : 1.0
+            self.importButton.isUserInteractionEnabled = !self.isRecording
         }
         
         // Hide color picker when recording starts
@@ -242,6 +261,11 @@ final class RecordingControlsView: UIView {
     @objc private func settingsTapped() {
         ShotTracerDesign.Haptics.buttonTap()
         delegate?.recordingControlsDidTapSettings(self)
+    }
+    
+    @objc private func importTapped() {
+        ShotTracerDesign.Haptics.buttonTap()
+        delegate?.recordingControlsDidTapImport(self)
     }
     
     @objc private func colorPickerTapped() {

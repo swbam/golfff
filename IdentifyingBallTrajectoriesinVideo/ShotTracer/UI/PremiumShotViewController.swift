@@ -1,5 +1,7 @@
 import UIKit
 import AVFoundation
+import Photos
+import PhotosUI
 
 // MARK: - Premium Shot View Controller
 /// Main view controller for live golf shot recording and tracing
@@ -231,12 +233,17 @@ extension PremiumShotViewController: RecordingControlsDelegate {
         presentAlignment()
     }
     
+    func recordingControlsDidTapImport(_ controls: RecordingControlsView) {
+        presentVideoPicker()
+    }
+    
     func recordingControls(_ controls: RecordingControlsView, didSelectColor color: UIColor) {
         sessionController.setTracerColor(color)
         glowingTracerView.tracerColor = color
     }
     
     func recordingControls(_ controls: RecordingControlsView, didSelectStyle style: TracerStyle) {
+        sessionController.setTracerStyle(style)
         glowingTracerView.tracerStyle = style
     }
 }
@@ -314,6 +321,75 @@ extension PremiumShotViewController: ShotSessionControllerDelegate {
         recordingControls.isRecording = false
         recordingControls.resetTimer()
         showError(error)
+    }
+}
+
+// MARK: - Video Import
+
+extension PremiumShotViewController: PHPickerViewControllerDelegate {
+    
+    func presentVideoPicker() {
+        var config = PHPickerConfiguration(photoLibrary: .shared())
+        config.filter = .videos
+        config.selectionLimit = 1
+        config.preferredAssetRepresentationMode = .current
+        
+        let picker = PHPickerViewController(configuration: config)
+        picker.delegate = self
+        present(picker, animated: true)
+    }
+    
+    func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+        picker.dismiss(animated: true)
+        
+        guard let result = results.first else { return }
+        
+        // Show loading indicator
+        let loadingAlert = UIAlertController(title: "Loading Video", message: "Please wait...", preferredStyle: .alert)
+        present(loadingAlert, animated: true)
+        
+        // Get the video asset
+        if result.itemProvider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
+            result.itemProvider.loadFileRepresentation(forTypeIdentifier: UTType.movie.identifier) { [weak self] url, error in
+                DispatchQueue.main.async {
+                    loadingAlert.dismiss(animated: true) {
+                        if let error = error {
+                            self?.showError(error)
+                            return
+                        }
+                        
+                        guard let url = url else {
+                            self?.showError(NSError(domain: "VideoImport", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not load video"]))
+                            return
+                        }
+                        
+                        // Copy to temp location since the URL is temporary
+                        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("imported_\(UUID().uuidString).mov")
+                        
+                        do {
+                            if FileManager.default.fileExists(atPath: tempURL.path) {
+                                try FileManager.default.removeItem(at: tempURL)
+                            }
+                            try FileManager.default.copyItem(at: url, to: tempURL)
+                            
+                            // Process the imported video
+                            self?.processImportedVideo(at: tempURL)
+                        } catch {
+                            self?.showError(error)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    private func processImportedVideo(at url: URL) {
+        // Open test mode with the video
+        let testVC = TestModeViewController()
+        testVC.preloadedVideoURL = url
+        let nav = UINavigationController(rootViewController: testVC)
+        nav.modalPresentationStyle = .fullScreen
+        present(nav, animated: true)
     }
 }
 
@@ -445,7 +521,7 @@ extension PremiumShotViewController {
     
     @objc private func quickLoadVideo() {
         TestVideoProcessor.loadFirstVideoFromLibrary { [weak self] asset in
-            if let asset = asset {
+            if asset != nil {
                 // Open test mode with this video pre-loaded
                 let testVC = TestModeViewController()
                 let nav = UINavigationController(rootViewController: testVC)

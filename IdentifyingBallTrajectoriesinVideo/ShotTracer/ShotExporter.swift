@@ -26,6 +26,10 @@ final class ShotExporter {
     var tracerStyle: TracerStyle = .neon
     var glowIntensity: CGFloat = 1.0
     
+    /// When true, assumes video already has tracer composited (real-time mode)
+    /// and just copies the file without additional processing
+    var isRealTimeComposited: Bool = false
+    
     private var isSimulator: Bool {
         #if targetEnvironment(simulator)
         return true
@@ -40,6 +44,20 @@ final class ShotExporter {
         print("🎬 EXPORT STARTING")
         print("═══════════════════════════════════════")
         print("   Video: \(videoURL.lastPathComponent)")
+        
+        // ═══════════════════════════════════════════════════════════════
+        // REAL-TIME COMPOSITING: Video already has tracer!
+        // Just return the URL - no processing needed!
+        // ═══════════════════════════════════════════════════════════════
+        if isRealTimeComposited {
+            print("   Mode: REAL-TIME COMPOSITED")
+            print("   Tracer already in video - returning as-is!")
+            print("═══════════════════════════════════════")
+            
+            // Just return the original URL since tracer is already baked in
+            completion(.success(videoURL))
+            return
+        }
         
         if let traj = trajectory {
             print("   Trajectory: ✅ \(traj.points.count) points")
@@ -57,11 +75,10 @@ final class ShotExporter {
         #if targetEnvironment(simulator)
         print("⚠️ SIMULATOR: Tracer overlay not supported")
         handleSimulatorExport(videoURL: videoURL, trajectory: trajectory, completion: completion)
-        return
-        #endif
-        
-        // Real device export with tracer overlay
+        #else
+        // Real device export with tracer overlay (traditional mode)
         performRealDeviceExport(videoURL: videoURL, trajectory: trajectory, tracerColor: tracerColor, completion: completion)
+        #endif
     }
     
     // MARK: - Simulator Export (simplified, no Core Animation)

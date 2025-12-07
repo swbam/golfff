@@ -27,12 +27,20 @@ protocol ShotSessionControllerDelegate: AnyObject {
 // MARK: - Shot Session Controller
 /// Main controller for live golf shot recording and tracing
 ///
+/// ═══════════════════════════════════════════════════════════════════
+/// REAL-TIME COMPOSITING MODE (SmoothSwing-style!)
+/// ═══════════════════════════════════════════════════════════════════
+///
 /// Flow:
-/// 1. User aligns with silhouette (ball position is FIXED - no tap needed)
+/// 1. User aligns with silhouette - AUTOMATIC lock-in with haptic!
 /// 2. Records at HIGH FRAME RATE (240fps if available)
-/// 3. Detects impact via pose detection
-/// 4. Tracks ball at high frame rate (easy at 240fps!)
-/// 5. Exports at 30fps with tracer overlay
+/// 3. Tracer is composited IN REAL-TIME onto video frames
+/// 4. Export is INSTANT - no post-processing needed!
+/// 5. Live view === Exported video
+///
+/// The KEY difference from traditional approach:
+/// - Old: Record video → Detect trajectory → Export with overlay (slow)
+/// - New: Detect trajectory → Composite onto frames → Record composited (instant!)
 
 final class ShotSessionController: NSObject {
     
@@ -49,7 +57,11 @@ final class ShotSessionController: NSObject {
     /// HIGH FRAME RATE ball tracker - the key to reliable detection!
     private var highFrameRateTracker: HighFrameRateBallTracker?
     
-    /// Video exporter
+    /// REAL-TIME COMPOSITING - tracer baked into recording!
+    private var realTimeRecordingManager: RealTimeRecordingManager?
+    private var realTimeCompositor: RealTimeCompositor?
+    
+    /// Video exporter (fallback for non-composited recordings)
     private let exporter = ShotExporter()
     
     /// Distance estimator
@@ -69,6 +81,17 @@ final class ShotSessionController: NSObject {
         return _liveShotDetector as! LiveShotDetector
     }
     
+    // Golfer alignment detector for automatic lock-in (iOS 14+)
+    private var _alignmentDetector: Any?
+    
+    @available(iOS 14.0, *)
+    var alignmentDetector: GolferAlignmentDetector {
+        if _alignmentDetector == nil {
+            _alignmentDetector = GolferAlignmentDetector()
+        }
+        return _alignmentDetector as! GolferAlignmentDetector
+    }
+    
     /// Ball position from silhouette alignment (NO TAP REQUIRED!)
     /// The silhouette defines where the ball is - user just aligns themselves
     private var silhouetteBallPosition: CGPoint?
@@ -81,9 +104,13 @@ final class ShotSessionController: NSObject {
     private var finalTrajectory: Trajectory?
     private var finalMetrics: ShotMetrics?
     private(set) var tracerColor: UIColor = ShotTracerDesign.Colors.tracerRed
+    private(set) var tracerStyle: TracerStyle = .neon
     
     /// Debug logging
     var debugLogging = true
+    
+    /// Use real-time compositing (SmoothSwing-style instant export)
+    var useRealTimeCompositing: Bool = true
     
     /// Current state
     var state: ShotState = .idle {
@@ -109,9 +136,17 @@ final class ShotSessionController: NSObject {
         self.trajectoryDetector.delegate = self
         self.trajectoryDetector.debugLogging = debugLogging
         
+        // Setup real-time compositing
+        setupRealTimeCompositing()
+        
         // Setup live detector callbacks (iOS 15+)
         if #available(iOS 15.0, *) {
             setupLiveShotDetector()
+        }
+        
+        // Setup alignment detector (iOS 14+)
+        if #available(iOS 14.0, *) {
+            setupAlignmentDetector()
         }
         
         // Monitor thermal state
@@ -124,6 +159,68 @@ final class ShotSessionController: NSObject {
         applyThermalSpacing()
         
         state = .ready
+    }
+    
+    // MARK: - Real-Time Compositing Setup
+    
+    private func setupRealTimeCompositing() {
+        // Create compositor with Metal acceleration
+        realTimeCompositor = RealTimeCompositor()
+        realTimeCompositor?.debugLogging = debugLogging
+        realTimeCompositor?.tracerColor = tracerColor
+        realTimeCompositor?.tracerStyle = tracerStyle
+        
+        // Create recording manager with compositor
+        realTimeRecordingManager = RealTimeRecordingManager(compositor: realTimeCompositor)
+        realTimeRecordingManager?.debugLogging = debugLogging
+        
+        // Wire up callbacks
+        realTimeRecordingManager?.onRecordingFinished = { [weak self] url in
+            guard let self = self else { return }
+            self.handleRealTimeRecordingFinished(url: url)
+        }
+        
+        realTimeRecordingManager?.onRecordingFailed = { [weak self] error in
+            guard let self = self else { return }
+            self.state = .ready
+            self.delegate?.shotSession(self, didFail: error)
+        }
+        
+        // Configure camera manager to use real-time recording
+        cameraManager.useRealTimeCompositing = useRealTimeCompositing
+        cameraManager.setupRealTimeRecording(manager: realTimeRecordingManager!)
+        
+        if debugLogging {
+            print("✅ Real-time compositing initialized")
+        }
+    }
+    
+    // MARK: - Alignment Detector Setup
+    
+    @available(iOS 14.0, *)
+    private func setupAlignmentDetector() {
+        alignmentDetector.debugLogging = debugLogging
+        
+        alignmentDetector.onLockedIn = { [weak self] result in
+            guard let self = self else { return }
+            
+            // Auto-lock position when golfer is in position!
+            if let ballPosition = result.ballPosition {
+                self.lockPosition(ballPosition: ballPosition)
+                
+                if self.debugLogging {
+                    print("🔒 AUTO-LOCKED via pose detection!")
+                    print("   Ball position: \(ballPosition)")
+                }
+            }
+        }
+        
+        alignmentDetector.onAlignmentChanged = { [weak self] result in
+            // Could update UI to show alignment progress
+            if self?.debugLogging == true && result.state != .searching {
+                print("👤 Alignment: \(result.state.displayName) (score: \(String(format: "%.2f", result.alignmentScore)))")
+            }
+        }
     }
     
     // MARK: - Setup
@@ -201,6 +298,15 @@ final class ShotSessionController: NSObject {
     /// Set tracer color
     func setTracerColor(_ color: UIColor) {
         tracerColor = color
+        realTimeCompositor?.tracerColor = color
+        realTimeRecordingManager?.setTracerColor(color)
+    }
+    
+    /// Set tracer style
+    func setTracerStyle(_ style: TracerStyle) {
+        tracerStyle = style
+        realTimeCompositor?.tracerStyle = style
+        realTimeRecordingManager?.setTracerStyle(style)
     }
     
     /// Start camera session
@@ -208,7 +314,7 @@ final class ShotSessionController: NSObject {
         cameraManager.configureSession()
     }
     
-    /// Start recording at HIGH FRAME RATE
+    /// Start recording at HIGH FRAME RATE with real-time compositing
     func startRecording() {
         guard case .ready = state else { return }
         
@@ -219,6 +325,10 @@ final class ShotSessionController: NSObject {
         frameCounter = 0
         distanceEstimator.reset()
         
+        // Clear compositor trajectory for new shot
+        realTimeCompositor?.clearTrajectory()
+        realTimeRecordingManager?.clearTrajectory()
+        
         // Ensure ball position is set
         if let ballPos = silhouetteBallPosition {
             highFrameRateTracker?.setInitialBallPosition(ballPos)
@@ -227,24 +337,37 @@ final class ShotSessionController: NSObject {
         // Start Vision detector
         trajectoryDetector.start()
         
-        // Start camera recording
+        // Start camera recording (uses real-time compositing if enabled)
         cameraManager.startRecording()
         
         if debugLogging {
             print("═══════════════════════════════════════")
             print("🎬 RECORDING STARTED @ \(cameraManager.currentFrameRate) fps")
+            if useRealTimeCompositing {
+                print("   Mode: REAL-TIME COMPOSITING")
+                print("   Live view === Export video ✓")
+            } else {
+                print("   Mode: Traditional (post-processing)")
+            }
             print("═══════════════════════════════════════")
         }
     }
     
-    /// Stop recording and begin export
+    /// Stop recording and begin export (or finish instantly with real-time compositing!)
     func stopRecording() {
         guard case .recording = state else { return }
         
-        state = .tracking
-        
         // Stop high frame rate tracker
         highFrameRateTracker?.stopTracking()
+        
+        if useRealTimeCompositing {
+            // REAL-TIME COMPOSITING: Video is already done!
+            // Just stop recording - the callback will handle finish
+            state = .exporting  // Brief state while file is finalized
+        } else {
+            // Traditional: Need to export with tracer
+            state = .tracking
+        }
         
         cameraManager.stopRecording()
         trajectoryDetector.stop()
@@ -256,6 +379,9 @@ final class ShotSessionController: NSObject {
         
         if debugLogging {
             print("🛑 Recording stopped")
+            if useRealTimeCompositing {
+                print("   Finalizing composited video...")
+            }
         }
     }
     
@@ -284,6 +410,29 @@ final class ShotSessionController: NSObject {
                     self.delegate?.shotSession(self, didFail: error)
                 }
             }
+        }
+    }
+    
+    // MARK: - Real-Time Recording Finished
+    
+    /// Handle completion of real-time composited recording
+    /// The video ALREADY has the tracer baked in - no export needed!
+    private func handleRealTimeRecordingFinished(url: URL) {
+        self.recordedURL = url
+        
+        if debugLogging {
+            print("═══════════════════════════════════════")
+            print("✅ REAL-TIME COMPOSITED VIDEO READY!")
+            print("   Tracer is ALREADY in the video")
+            print("   NO POST-PROCESSING NEEDED!")
+            print("   File: \(url.lastPathComponent)")
+            print("═══════════════════════════════════════")
+        }
+        
+        // The video already has the tracer - go straight to finished!
+        DispatchQueue.main.async {
+            self.state = .finished(videoURL: url)
+            self.delegate?.shotSession(self, didFinishExportedVideo: url)
         }
     }
     
@@ -424,12 +573,20 @@ extension ShotSessionController: CameraManagerDelegate {
         frameCounter += 1
         
         // ═══════════════════════════════════════════════════════════════
-        // HIGH FRAME RATE PROCESSING
-        // At 240fps, process EVERY frame for tracking
-        // But only update UI every 4th frame (60fps display)
+        // REAL-TIME COMPOSITING PIPELINE
+        // 
+        // At 240fps capture:
+        // 1. Process EVERY frame for trajectory detection
+        // 2. Composite tracer onto frames during recording
+        // 3. Write composited frames to video file
+        // 4. Live view uses SAME trajectory data
+        // 5. Export is INSTANT - tracer already in video!
         // ═══════════════════════════════════════════════════════════════
         
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        
+        // Get current trajectory for compositing
+        var currentTrajectory: Trajectory?
         
         // Process with HIGH FRAME RATE tracker (primary)
         if let tracker = highFrameRateTracker, case .recording = state {
@@ -439,13 +596,16 @@ extension ShotSessionController: CameraManagerDelegate {
                 orientation: trajectoryDetector.orientation
             )
             
+            if result.isTracking {
+                currentTrajectory = tracker.buildTrajectory()
+                finalTrajectory = currentTrajectory
+            }
+            
             // Update UI at display rate (every 4th frame at 240fps = 60fps UI)
             let displayUpdateInterval = max(1, Int(manager.currentFrameRate / 60))
             
             if result.isTracking && frameCounter % displayUpdateInterval == 0 {
-                if let trajectory = tracker.buildTrajectory() {
-                    finalTrajectory = trajectory
-                    
+                if let trajectory = currentTrajectory {
                     DispatchQueue.main.async { [weak self] in
                         guard let self = self else { return }
                         self.delegate?.shotSession(self, didUpdateTrajectory: trajectory)
@@ -461,6 +621,27 @@ extension ShotSessionController: CameraManagerDelegate {
         
         // Also feed to Vision detector (backup)
         trajectoryDetector.process(sampleBuffer: sampleBuffer)
+        
+        // Use Vision detector trajectory if HFR tracker has none
+        if currentTrajectory == nil {
+            currentTrajectory = trajectoryDetector.currentTrajectory
+        }
+        
+        // ═══════════════════════════════════════════════════════════════
+        // REAL-TIME COMPOSITING: Feed frames to recording manager
+        // The tracer gets baked INTO the video during recording!
+        // ═══════════════════════════════════════════════════════════════
+        if case .recording = state,
+           useRealTimeCompositing,
+           let recorder = realTimeRecordingManager,
+           recorder.isRecording {
+            
+            // Update compositor trajectory (same data used for live view!)
+            realTimeCompositor?.updateTrajectory(currentTrajectory?.projectedPoints.map { $0.normalized } ?? [])
+            
+            // Process and write composited frame
+            recorder.processVideoFrame(sampleBuffer, trajectory: currentTrajectory)
+        }
         
         // Feed to live shot detector for impact detection (iOS 15+)
         if #available(iOS 15.0, *), case .recording = state {
@@ -479,6 +660,21 @@ extension ShotSessionController: CameraManagerDelegate {
                 }
             }
         }
+        
+        // Alignment detection during alignment phase (iOS 14+)
+        if #available(iOS 14.0, *), case .aligning = state {
+            _ = alignmentDetector.processFrame(pixelBuffer, orientation: trajectoryDetector.orientation)
+        }
+    }
+    
+    func cameraManager(_ manager: CameraManager, didOutputAudio sampleBuffer: CMSampleBuffer) {
+        // Feed audio to real-time recording manager
+        if case .recording = state,
+           useRealTimeCompositing,
+           let recorder = realTimeRecordingManager,
+           recorder.isRecording {
+            recorder.processAudioSample(sampleBuffer)
+        }
     }
     
     func cameraManager(_ manager: CameraManager, didFinishRecordingTo url: URL) {
@@ -488,7 +684,11 @@ extension ShotSessionController: CameraManagerDelegate {
             print("📹 Recording saved to: \(url.lastPathComponent)")
         }
         
-        attemptExportIfReady()
+        // If using real-time compositing, the callback is handled by RealTimeRecordingManager
+        // Otherwise, attempt traditional export
+        if !useRealTimeCompositing {
+            attemptExportIfReady()
+        }
     }
     
     func cameraManager(_ manager: CameraManager, didFail error: Error) {

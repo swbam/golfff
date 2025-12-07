@@ -32,11 +32,15 @@ final class TestModeViewController: UIViewController {
     private var selectedAsset: AVAsset?
     private var ballPosition: CGPoint = CGPoint(x: 0.5, y: 0.85)
     private var overlayScale: CGFloat = 1.0
+    private var lockedROI: CGRect?   // Vision coords
     private var isProcessing = false
     private var detectedPoints: [CGPoint] = []
     private var allProjectedPoints: [CGPoint] = []
     private var frameCount = 0
     private var detectionCount = 0
+    
+    /// Pre-loaded video URL (set before presenting)
+    var preloadedVideoURL: URL?
     
     // MARK: - Lifecycle
     
@@ -46,11 +50,22 @@ final class TestModeViewController: UIViewController {
         setupVision()
         log("🧪 Test Mode Ready")
         log("Load a video with golf ball in flight")
+        
+        // Check for preloaded video
+        if let preloadedURL = preloadedVideoURL {
+            log("📹 Loading preloaded video...")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                self.loadVideo(from: preloadedURL)
+            }
+        }
     }
     
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         trajectoryLayer.frame = videoImageView.bounds
+        silhouetteOverlay.frame = videoImageView.bounds
+        videoImageView.bringSubviewToFront(silhouetteOverlay)
+        videoImageView.bringSubviewToFront(ballMarkerView)
     }
     
     // MARK: - Setup
@@ -98,7 +113,7 @@ final class TestModeViewController: UIViewController {
         // Silhouette overlay (movable/scalable)
         silhouetteOverlay.frame = videoImageView.bounds
         silhouetteOverlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        silhouetteOverlay.alpha = 0.55
+        silhouetteOverlay.alpha = 0.9
         silhouetteOverlay.isUserInteractionEnabled = true
         videoImageView.addSubview(silhouetteOverlay)
         
@@ -120,7 +135,7 @@ final class TestModeViewController: UIViewController {
         ballMarkerView.layer.borderColor = UIColor.white.cgColor
         ballMarkerView.layer.borderWidth = 3
         ballMarkerView.frame = CGRect(x: 0, y: 0, width: 24, height: 24)
-        ballMarkerView.isHidden = true
+        ballMarkerView.isHidden = false
         videoImageView.addSubview(ballMarkerView)
         
         // Tap gesture
@@ -226,7 +241,7 @@ final class TestModeViewController: UIViewController {
         
         trajectoryRequest.objectMinimumNormalizedRadius = 0.0005
         trajectoryRequest.objectMaximumNormalizedRadius = 0.15
-        trajectoryRequest.regionOfInterest = CGRect(x: 0, y: 0, width: 1, height: 1)
+        trajectoryRequest.regionOfInterest = lockedROI ?? CGRect(x: 0, y: 0, width: 1, height: 1)
         if #available(iOS 15.0, *) {
             trajectoryRequest.targetFrameTime = CMTime(value: 1, timescale: 240)
         }
@@ -280,6 +295,11 @@ final class TestModeViewController: UIViewController {
     
     // MARK: - Video Loading
     
+    private func loadVideo(from url: URL) {
+        let asset = AVURLAsset(url: url)
+        loadAsset(asset)
+    }
+    
     private func loadAsset(_ asset: AVAsset) {
         selectedAsset = asset
         
@@ -326,6 +346,8 @@ final class TestModeViewController: UIViewController {
         detectionCount = 0
         trajectoryStore.reset()
         trajectoryStore.allowAnyTrajectory = true
+        lockedROI = lockedROI ?? CoordinateConverter.uiKitToVision(silhouetteOverlay.detectionROI.clamped).clamped
+        trajectoryStore.expectedStartNormalized = ballPosition
         trajectoryLayer.path = nil
         
         // Reset Vision
@@ -335,6 +357,12 @@ final class TestModeViewController: UIViewController {
         log("▶️ Starting trajectory detection...")
         log("   Using AVAssetReader for reliable frames")
         log("   Applying contrast enhancement")
+        if let roi = lockedROI {
+            log("   ROI set: \(roi)")
+        } else {
+            log("   ROI: full frame")
+        }
+        log("   Expected ball start: (\(String(format: "%.2f", ballPosition.x)), \(String(format: "%.2f", ballPosition.y)))")
         
         progressView.isHidden = false
         progressView.progress = 0
@@ -386,7 +414,7 @@ final class TestModeViewController: UIViewController {
                         return
                     }
                     
-                    let time = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+                    _ = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)  // timestamp available if needed
                     frameCount += 1
                     
                     // ENHANCE CONTRAST for better ball detection
@@ -505,7 +533,12 @@ final class TestModeViewController: UIViewController {
             }
             
             DispatchQueue.main.async { [weak self] in
+                self?.trajectoryStore.expectedStartNormalized = self?.ballPosition
+                if let roi = self?.lockedROI {
+                    self?.trajectoryRequest.regionOfInterest = roi
+                }
                 self?.log("🎾 DETECTED! Conf: \(String(format: "%.2f", observation.confidence)), \(observation.projectedPoints.count) projected pts")
+                self?.updateTrajectoryDrawing()
             }
         }
     }
@@ -516,6 +549,7 @@ final class TestModeViewController: UIViewController {
         let x = ballPosition.x * videoImageView.bounds.width - 12
         let y = ballPosition.y * videoImageView.bounds.height - 12
         ballMarkerView.frame = CGRect(x: x, y: y, width: 24, height: 24)
+        ballMarkerView.isHidden = false
     }
     
     private func updateTrajectoryDrawing() {
@@ -580,7 +614,17 @@ final class TestModeViewController: UIViewController {
     @objc private func lockSilhouetteTapped() {
         ballPosition = silhouetteOverlay.normalizedBallPosition
         updateBallMarker()
-        log("🔒 Silhouette locked. Ball: (\(String(format: "%.2f", ballPosition.x)), \(String(format: "%.2f", ballPosition.y)))")
+        
+        // Compute Vision ROI from silhouette overlay
+        let uiKitROI = silhouetteOverlay.detectionROI.clamped
+        let visionROI = CoordinateConverter.uiKitToVision(uiKitROI).clamped
+        lockedROI = visionROI
+        trajectoryRequest.regionOfInterest = visionROI
+        trajectoryStore.expectedStartNormalized = ballPosition
+        
+        log("🔒 Silhouette locked.")
+        log("   Ball: (\(String(format: "%.2f", ballPosition.x)), \(String(format: "%.2f", ballPosition.y)))")
+        log("   ROI (Vision coords): \(visionROI)")
     }
     
     private func finishProcessing(success: Bool, message: String) {

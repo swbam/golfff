@@ -277,7 +277,7 @@ extension TrajectoryDetector {
             
             // In UIKit coords (Y down): ball goes UP (Y decreases) then DOWN (Y increases)
             let wentUp = mid.y < start.y
-            let cameDown = end.y > mid.y - 0.05  // Allow small tolerance
+            _ = end.y > mid.y - 0.05  // cameDown - reserved for future descent validation
             
             if !wentUp {
                 return false  // Ball never went up
