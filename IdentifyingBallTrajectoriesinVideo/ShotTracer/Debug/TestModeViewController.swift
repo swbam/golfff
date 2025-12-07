@@ -23,6 +23,7 @@ final class TestModeViewController: UIViewController {
     private let videoImageView = UIImageView()
     private let trajectoryLayer = CAShapeLayer()
     private let ballMarkerView = UIView()
+    private let silhouetteOverlay = AlignmentOverlayView()
     private let statusLabel = UILabel()
     private let progressView = UIProgressView()
     private let logTextView = UITextView()
@@ -30,6 +31,7 @@ final class TestModeViewController: UIViewController {
     // MARK: - State
     private var selectedAsset: AVAsset?
     private var ballPosition: CGPoint = CGPoint(x: 0.5, y: 0.85)
+    private var overlayScale: CGFloat = 1.0
     private var isProcessing = false
     private var detectedPoints: [CGPoint] = []
     private var allProjectedPoints: [CGPoint] = []
@@ -93,6 +95,13 @@ final class TestModeViewController: UIViewController {
         videoImageView.isUserInteractionEnabled = true
         videoContainerView.addSubview(videoImageView)
         
+        // Silhouette overlay (movable/scalable)
+        silhouetteOverlay.frame = videoImageView.bounds
+        silhouetteOverlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        silhouetteOverlay.alpha = 0.55
+        silhouetteOverlay.isUserInteractionEnabled = true
+        videoImageView.addSubview(silhouetteOverlay)
+        
         // Trajectory layer
         trajectoryLayer.strokeColor = ShotTracerDesign.Colors.tracerGold.cgColor
         trajectoryLayer.fillColor = UIColor.clear.cgColor
@@ -117,6 +126,12 @@ final class TestModeViewController: UIViewController {
         // Tap gesture
         let tapGesture = UITapGestureRecognizer(target: self, action: #selector(videoTapped(_:)))
         videoImageView.addGestureRecognizer(tapGesture)
+        
+        // Pan/Pinch to position silhouette on the golfer
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+        silhouetteOverlay.addGestureRecognizer(pan)
+        let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
+        silhouetteOverlay.addGestureRecognizer(pinch)
         
         // Status
         statusLabel.text = "No video loaded"
@@ -150,6 +165,10 @@ final class TestModeViewController: UIViewController {
         let quickBtn = createButton(title: "⚡ Quick", color: ShotTracerDesign.Colors.surfaceElevated)
         quickBtn.addTarget(self, action: #selector(quickLoadTapped), for: .touchUpInside)
         contentStack.addArrangedSubview(quickBtn)
+        
+        let lockBtn = createButton(title: "🔒 Lock Silhouette", color: ShotTracerDesign.Colors.tracerRed)
+        lockBtn.addTarget(self, action: #selector(lockSilhouetteTapped), for: .touchUpInside)
+        contentStack.addArrangedSubview(lockBtn)
         
         // Log
         logTextView.backgroundColor = ShotTracerDesign.Colors.surface
@@ -195,8 +214,9 @@ final class TestModeViewController: UIViewController {
     
     private func setupVision() {
         requestHandler = VNSequenceRequestHandler()
+        trajectoryStore.allowAnyTrajectory = true
         
-        // VERY permissive trajectory detection
+        // Instant / permissive trajectory detection for test mode
         trajectoryRequest = VNDetectTrajectoriesRequest(
             frameAnalysisSpacing: .zero,
             trajectoryLength: 5
@@ -204,9 +224,12 @@ final class TestModeViewController: UIViewController {
             self?.handleTrajectoryResults(request, error: error)
         }
         
-        // Allow ANY size object
-        trajectoryRequest.objectMinimumNormalizedRadius = 0.001
-        trajectoryRequest.objectMaximumNormalizedRadius = 1.0
+        trajectoryRequest.objectMinimumNormalizedRadius = 0.0005
+        trajectoryRequest.objectMaximumNormalizedRadius = 0.15
+        trajectoryRequest.regionOfInterest = CGRect(x: 0, y: 0, width: 1, height: 1)
+        if #available(iOS 15.0, *) {
+            trajectoryRequest.targetFrameTime = CMTime(value: 1, timescale: 240)
+        }
     }
     
     // MARK: - Actions
@@ -275,7 +298,7 @@ final class TestModeViewController: UIViewController {
         // Show first frame
         showFirstFrame(of: asset)
         
-        ballMarkerView.isHidden = false
+        ballMarkerView.isHidden = true
         updateBallMarker()
     }
     
@@ -302,6 +325,7 @@ final class TestModeViewController: UIViewController {
         frameCount = 0
         detectionCount = 0
         trajectoryStore.reset()
+        trajectoryStore.allowAnyTrajectory = true
         trajectoryLayer.path = nil
         
         // Reset Vision
@@ -537,6 +561,28 @@ final class TestModeViewController: UIViewController {
         trajectoryLayer.path = path.cgPath
     }
     
+    // MARK: - Gestures (Silhouette positioning)
+    @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
+        let translation = gesture.translation(in: videoImageView)
+        silhouetteOverlay.center = CGPoint(
+            x: silhouetteOverlay.center.x + translation.x,
+            y: silhouetteOverlay.center.y + translation.y
+        )
+        gesture.setTranslation(.zero, in: videoImageView)
+    }
+    
+    @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
+        overlayScale *= gesture.scale
+        silhouetteOverlay.transform = CGAffineTransform(scaleX: overlayScale, y: overlayScale)
+        gesture.scale = 1.0
+    }
+    
+    @objc private func lockSilhouetteTapped() {
+        ballPosition = silhouetteOverlay.normalizedBallPosition
+        updateBallMarker()
+        log("🔒 Silhouette locked. Ball: (\(String(format: "%.2f", ballPosition.x)), \(String(format: "%.2f", ballPosition.y)))")
+    }
+    
     private func finishProcessing(success: Bool, message: String) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
@@ -666,4 +712,3 @@ extension TestModeViewController: PHPickerViewControllerDelegate {
 }
 
 #endif
-

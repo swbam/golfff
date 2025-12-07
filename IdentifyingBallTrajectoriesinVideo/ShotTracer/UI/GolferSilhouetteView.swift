@@ -14,7 +14,7 @@ final class GolferSilhouetteView: UIView {
         didSet { setNeedsDisplay() }
     }
     
-    var lineWidth: CGFloat = 2.5 {
+    var lineWidth: CGFloat = 4 {
         didSet { setNeedsDisplay() }
     }
     
@@ -118,66 +118,59 @@ final class GolferSilhouetteView: UIView {
     
     private func drawAddressStance(path: UIBezierPath, w: CGFloat, h: CGFloat) {
         // Head
-        let headCenter = CGPoint(x: w * 0.5, y: h * 0.08)
-        let headRadius = w * 0.06
+        let headCenter = CGPoint(x: w * 0.5, y: h * 0.1)
+        let headRadius = w * 0.07
         path.addArc(withCenter: headCenter, radius: headRadius, startAngle: 0, endAngle: .pi * 2, clockwise: true)
-        
-        // Cap/visor
-        path.move(to: CGPoint(x: w * 0.42, y: h * 0.05))
-        path.addLine(to: CGPoint(x: w * 0.58, y: h * 0.05))
-        
+
         // Neck
-        path.move(to: CGPoint(x: w * 0.5, y: h * 0.14))
-        path.addLine(to: CGPoint(x: w * 0.5, y: h * 0.18))
-        
-        // Shoulders
-        path.move(to: CGPoint(x: w * 0.35, y: h * 0.20))
-        path.addLine(to: CGPoint(x: w * 0.65, y: h * 0.20))
-        
-        // Torso (bent forward for golf stance)
-        path.move(to: CGPoint(x: w * 0.5, y: h * 0.18))
-        path.addQuadCurve(to: CGPoint(x: w * 0.52, y: h * 0.45), controlPoint: CGPoint(x: w * 0.55, y: h * 0.32))
-        
-        // Left arm (bent, holding club)
-        path.move(to: CGPoint(x: w * 0.35, y: h * 0.20))
-        path.addQuadCurve(to: CGPoint(x: w * 0.42, y: h * 0.42), controlPoint: CGPoint(x: w * 0.30, y: h * 0.32))
-        
-        // Right arm
-        path.move(to: CGPoint(x: w * 0.65, y: h * 0.20))
-        path.addQuadCurve(to: CGPoint(x: w * 0.44, y: h * 0.42), controlPoint: CGPoint(x: w * 0.58, y: h * 0.32))
-        
-        // Hands (grip position)
-        path.addArc(withCenter: CGPoint(x: w * 0.43, y: h * 0.42), radius: w * 0.025, startAngle: 0, endAngle: .pi * 2, clockwise: true)
-        
+        path.move(to: CGPoint(x: w * 0.5, y: h * 0.17))
+        path.addLine(to: CGPoint(x: w * 0.5, y: h * 0.2))
+
+        // Shoulders + arms forming a triangle toward the grip
+        let leftShoulder = CGPoint(x: w * 0.36, y: h * 0.2)
+        let rightShoulder = CGPoint(x: w * 0.64, y: h * 0.2)
+        let grip = CGPoint(x: w * 0.45, y: h * 0.42)
+
+        path.move(to: leftShoulder)
+        path.addLine(to: rightShoulder)
+        path.move(to: leftShoulder)
+        path.addQuadCurve(to: grip, controlPoint: CGPoint(x: w * 0.30, y: h * 0.32))
+        path.move(to: rightShoulder)
+        path.addQuadCurve(to: grip, controlPoint: CGPoint(x: w * 0.70, y: h * 0.32))
+
+        // Torso
+        path.move(to: CGPoint(x: w * 0.5, y: h * 0.2))
+        path.addQuadCurve(to: CGPoint(x: w * 0.5, y: h * 0.45), controlPoint: CGPoint(x: w * 0.55, y: h * 0.32))
+
         // Hips
-        path.move(to: CGPoint(x: w * 0.40, y: h * 0.45))
-        path.addLine(to: CGPoint(x: w * 0.60, y: h * 0.45))
-        
-        // Left leg
-        path.move(to: CGPoint(x: w * 0.42, y: h * 0.45))
-        path.addQuadCurve(to: CGPoint(x: w * 0.38, y: h * 0.70), controlPoint: CGPoint(x: w * 0.38, y: h * 0.58))
-        path.addLine(to: CGPoint(x: w * 0.36, y: h * 0.90))
-        
-        // Left foot
-        path.move(to: CGPoint(x: w * 0.32, y: h * 0.90))
-        path.addLine(to: CGPoint(x: w * 0.40, y: h * 0.90))
-        
-        // Right leg
-        path.move(to: CGPoint(x: w * 0.58, y: h * 0.45))
-        path.addQuadCurve(to: CGPoint(x: w * 0.62, y: h * 0.70), controlPoint: CGPoint(x: w * 0.62, y: h * 0.58))
-        path.addLine(to: CGPoint(x: w * 0.64, y: h * 0.90))
-        
-        // Right foot
-        path.move(to: CGPoint(x: w * 0.60, y: h * 0.90))
-        path.addLine(to: CGPoint(x: w * 0.68, y: h * 0.90))
-        
-        // Golf club
-        path.move(to: CGPoint(x: w * 0.43, y: h * 0.42))
-        path.addLine(to: CGPoint(x: w * 0.42, y: h * 0.88)) // Shaft
-        
-        // Club head
-        path.move(to: CGPoint(x: w * 0.38, y: h * 0.88))
-        path.addLine(to: CGPoint(x: w * 0.46, y: h * 0.88))
+        let leftHip = CGPoint(x: w * 0.42, y: h * 0.45)
+        let rightHip = CGPoint(x: w * 0.58, y: h * 0.45)
+        path.move(to: leftHip)
+        path.addLine(to: rightHip)
+
+        // Legs
+        let leftKnee = CGPoint(x: w * 0.40, y: h * 0.65)
+        let rightKnee = CGPoint(x: w * 0.60, y: h * 0.65)
+        let leftAnkle = CGPoint(x: w * 0.40, y: h * 0.9)
+        let rightAnkle = CGPoint(x: w * 0.60, y: h * 0.9)
+
+        path.move(to: leftHip)
+        path.addQuadCurve(to: leftAnkle, controlPoint: leftKnee)
+        path.move(to: rightHip)
+        path.addQuadCurve(to: rightAnkle, controlPoint: rightKnee)
+
+        // Feet
+        path.move(to: CGPoint(x: leftAnkle.x - w * 0.03, y: leftAnkle.y))
+        path.addLine(to: CGPoint(x: leftAnkle.x + w * 0.05, y: leftAnkle.y))
+        path.move(to: CGPoint(x: rightAnkle.x - w * 0.05, y: rightAnkle.y))
+        path.addLine(to: CGPoint(x: rightAnkle.x + w * 0.03, y: rightAnkle.y))
+
+        // Golf club (shaft + head)
+        path.move(to: grip)
+        let clubHead = CGPoint(x: w * 0.44, y: h * 0.88)
+        path.addLine(to: clubHead)
+        path.addLine(to: CGPoint(x: clubHead.x - w * 0.05, y: clubHead.y))
+        path.addLine(to: CGPoint(x: clubHead.x + w * 0.02, y: clubHead.y + h * 0.02))
     }
     
     private func drawBackswingStance(path: UIBezierPath, w: CGFloat, h: CGFloat) {
@@ -239,57 +232,51 @@ final class GolferSilhouetteView: UIView {
     }
     
     private func drawFollowThroughStance(path: UIBezierPath, w: CGFloat, h: CGFloat) {
-        // Head (looking at target)
-        let headCenter = CGPoint(x: w * 0.52, y: h * 0.12)
-        let headRadius = w * 0.06
+        // Head
+        let headCenter = CGPoint(x: w * 0.52, y: h * 0.08)
+        let headRadius = w * 0.07
         path.addArc(withCenter: headCenter, radius: headRadius, startAngle: 0, endAngle: .pi * 2, clockwise: true)
-        
-        // Neck
-        path.move(to: CGPoint(x: w * 0.52, y: h * 0.18))
-        path.addLine(to: CGPoint(x: w * 0.50, y: h * 0.22))
-        
-        // Shoulders (fully rotated)
-        path.move(to: CGPoint(x: w * 0.62, y: h * 0.20))
-        path.addLine(to: CGPoint(x: w * 0.38, y: h * 0.24))
-        
-        // Torso (rotated toward target)
-        path.move(to: CGPoint(x: w * 0.50, y: h * 0.22))
-        path.addQuadCurve(to: CGPoint(x: w * 0.48, y: h * 0.45), controlPoint: CGPoint(x: w * 0.46, y: h * 0.34))
-        
-        // Arms (extended toward target, high finish)
-        path.move(to: CGPoint(x: w * 0.62, y: h * 0.20))
-        path.addQuadCurve(to: CGPoint(x: w * 0.28, y: h * 0.15), controlPoint: CGPoint(x: w * 0.45, y: h * 0.05))
-        
-        path.move(to: CGPoint(x: w * 0.38, y: h * 0.24))
-        path.addQuadCurve(to: CGPoint(x: w * 0.30, y: h * 0.18), controlPoint: CGPoint(x: w * 0.32, y: h * 0.22))
-        
-        // Hands at finish
-        path.addArc(withCenter: CGPoint(x: w * 0.29, y: h * 0.16), radius: w * 0.025, startAngle: 0, endAngle: .pi * 2, clockwise: true)
-        
-        // Club (over shoulder)
-        path.move(to: CGPoint(x: w * 0.28, y: h * 0.15))
-        path.addLine(to: CGPoint(x: w * 0.22, y: h * 0.35))
-        
-        // Hips (fully rotated)
-        path.move(to: CGPoint(x: w * 0.56, y: h * 0.44))
-        path.addLine(to: CGPoint(x: w * 0.40, y: h * 0.46))
-        
-        // Left leg (posted up)
-        path.move(to: CGPoint(x: w * 0.44, y: h * 0.45))
-        path.addLine(to: CGPoint(x: w * 0.42, y: h * 0.70))
-        path.addLine(to: CGPoint(x: w * 0.40, y: h * 0.90))
-        
-        path.move(to: CGPoint(x: w * 0.36, y: h * 0.90))
-        path.addLine(to: CGPoint(x: w * 0.44, y: h * 0.90))
-        
-        // Right leg (on toe)
-        path.move(to: CGPoint(x: w * 0.52, y: h * 0.45))
-        path.addQuadCurve(to: CGPoint(x: w * 0.58, y: h * 0.70), controlPoint: CGPoint(x: w * 0.58, y: h * 0.58))
-        path.addLine(to: CGPoint(x: w * 0.62, y: h * 0.88))
-        
-        // Right toe
-        path.move(to: CGPoint(x: w * 0.60, y: h * 0.90))
-        path.addLine(to: CGPoint(x: w * 0.65, y: h * 0.88))
+
+        // Neck + tilted torso
+        path.move(to: CGPoint(x: w * 0.52, y: h * 0.15))
+        path.addQuadCurve(to: CGPoint(x: w * 0.54, y: h * 0.42), controlPoint: CGPoint(x: w * 0.60, y: h * 0.28))
+
+        // Shoulders + arms wrapped (finish pose)
+        let leftShoulder = CGPoint(x: w * 0.40, y: h * 0.18)
+        let rightShoulder = CGPoint(x: w * 0.64, y: h * 0.20)
+        let hands = CGPoint(x: w * 0.35, y: h * 0.12)
+
+        path.move(to: leftShoulder)
+        path.addLine(to: rightShoulder)
+        path.move(to: rightShoulder)
+        path.addQuadCurve(to: hands, controlPoint: CGPoint(x: w * 0.62, y: h * 0.08))
+        path.move(to: leftShoulder)
+        path.addQuadCurve(to: hands, controlPoint: CGPoint(x: w * 0.34, y: h * 0.10))
+
+        // Hips rotated
+        let leftHip = CGPoint(x: w * 0.45, y: h * 0.46)
+        let rightHip = CGPoint(x: w * 0.58, y: h * 0.46)
+        path.move(to: leftHip)
+        path.addLine(to: rightHip)
+
+        // Lead leg straight, trail leg on toe
+        let leadKnee = CGPoint(x: w * 0.46, y: h * 0.68)
+        let leadAnkle = CGPoint(x: w * 0.46, y: h * 0.92)
+        path.move(to: leftHip)
+        path.addQuadCurve(to: leadAnkle, controlPoint: leadKnee)
+        path.move(to: CGPoint(x: leadAnkle.x - w * 0.04, y: leadAnkle.y))
+        path.addLine(to: CGPoint(x: leadAnkle.x + w * 0.05, y: leadAnkle.y))
+
+        let trailKnee = CGPoint(x: w * 0.64, y: h * 0.68)
+        let trailAnkle = CGPoint(x: w * 0.66, y: h * 0.88)
+        path.move(to: rightHip)
+        path.addQuadCurve(to: trailAnkle, controlPoint: trailKnee)
+        path.move(to: CGPoint(x: trailAnkle.x - w * 0.02, y: trailAnkle.y))
+        path.addLine(to: CGPoint(x: trailAnkle.x + w * 0.05, y: trailAnkle.y - w * 0.02))
+
+        // Club wrapped around shoulders
+        path.move(to: hands)
+        path.addQuadCurve(to: CGPoint(x: w * 0.25, y: h * 0.28), controlPoint: CGPoint(x: w * 0.20, y: h * 0.10))
     }
 }
 

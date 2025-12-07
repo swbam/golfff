@@ -133,6 +133,8 @@ struct Trajectory {
 /// Stores trajectory data that can be used for BOTH live rendering AND video export
 /// This ensures live tracer EXACTLY matches exported tracer
 final class TrajectoryStore {
+    /// In test/instant modes we may want to accept any trajectory without golf-shape validation
+    var allowAnyTrajectory = false
     /// Expected ball launch position in UIKit-normalized coords (from alignment overlay)
     var expectedStartNormalized: CGPoint?
     
@@ -202,6 +204,7 @@ final class TrajectoryStore {
         // Select trajectory with highest confidence and most points
         primaryTrajectory = trajectories.values
             .filter { trajectory in
+                if allowAnyTrajectory { return true }
                 guard trajectory.isValidGolfTrajectory else { return false }
                 // If we know the expected start, drop wildly off-target trajectories early
                 if let expected = expectedStartNormalized,
