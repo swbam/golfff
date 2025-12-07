@@ -12,6 +12,9 @@ final class TrajectoryDetector {
     var regionOfInterest: CGRect?
     var orientation: CGImagePropertyOrientation = .right
     var frameAnalysisSpacing: CMTime = .zero
+    var minimumNormalizedRadius: Float = 0.002
+    var maximumNormalizedRadius: Float = 0.12
+    var desiredTrajectoryLength: Int = 7
 
     private var isRunning = false
     private var currentTrajectory: Trajectory?
@@ -56,6 +59,9 @@ final class TrajectoryDetector {
             }
 
             do {
+                if self.missingFrameCount == 0 {
+                    print("🔎 TrajectoryDetector running Vision pass | minR: \(self.request.objectMinimumNormalizedRadius) maxR: \(self.request.objectMaximumNormalizedRadius) len: \(self.request.trajectoryLength) roi: \(self.request.regionOfInterest)")
+                }
                 try self.requestHandler.perform([self.request], on: sampleBuffer, orientation: self.orientation)
             } catch {
                 // Vision errors are non-fatal for the session; log and continue.
@@ -71,12 +77,22 @@ final class TrajectoryDetector {
         }
     }
 
+    func updateDetectionParameters(minRadius: Float? = nil, maxRadius: Float? = nil, trajectoryLength: Int? = nil) {
+        if let minRadius { minimumNormalizedRadius = minRadius }
+        if let maxRadius { maximumNormalizedRadius = maxRadius }
+        if let trajectoryLength { desiredTrajectoryLength = trajectoryLength }
+
+        if isRunning {
+            request = makeRequest()
+        }
+    }
+
     private func makeRequest() -> VNDetectTrajectoriesRequest {
         // Golf ball trajectory detection requires specific parameters:
         // - Golf balls are small (4.27cm diameter)
         // - They move fast (driver: 150+ mph, wedge: 80+ mph)
         // - trajectoryLength: minimum 5 points needed for parabolic detection
-        let request = VNDetectTrajectoriesRequest(frameAnalysisSpacing: frameAnalysisSpacing, trajectoryLength: 5) { [weak self] req, error in
+        let request = VNDetectTrajectoriesRequest(frameAnalysisSpacing: frameAnalysisSpacing, trajectoryLength: desiredTrajectoryLength) { [weak self] req, error in
             guard let self else { return }
             if let error = error {
                 print("Trajectory request error: \(error)")
@@ -89,8 +105,8 @@ final class TrajectoryDetector {
         // - At typical filming distance (5-15m), ball appears as 0.5-2% of frame
         // - Minimum: catches ball at further distances / smaller in frame
         // - Maximum: allows detection when ball is closer / larger
-        request.objectMinimumNormalizedRadius = 0.004  // ~0.4% of frame (ball at 15m)
-        request.objectMaximumNormalizedRadius = 0.08   // ~8% of frame (ball very close or with motion blur)
+        request.objectMinimumNormalizedRadius = minimumNormalizedRadius
+        request.objectMaximumNormalizedRadius = maximumNormalizedRadius
         
         if let roi = regionOfInterest {
             request.regionOfInterest = roi
@@ -101,12 +117,18 @@ final class TrajectoryDetector {
     private func handle(request: VNRequest) {
         guard let observations = request.results as? [VNTrajectoryObservation] else {
             missingFrameCount += 1
+            if missingFrameCount == maxMissingFrames / 2 {
+                print("⚠️ TrajectoryDetector: no observations in recent frames")
+            }
             checkForCompletion()
             return
         }
 
         guard let best = observations.max(by: { $0.confidence < $1.confidence }) else {
             missingFrameCount += 1
+            if missingFrameCount == maxMissingFrames / 2 {
+                print("⚠️ TrajectoryDetector: observations empty despite Vision returning results")
+            }
             checkForCompletion()
             return
         }

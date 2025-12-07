@@ -20,6 +20,10 @@ final class AssetTrajectoryProcessor: NSObject {
     
     // Legacy support
     private weak var legacyDetector: TrajectoryDetector?
+
+    // Vision trajectory detection
+    private var visionObservation: VNTrajectoryObservation?
+    private let visionSequenceHandler = VNSequenceRequestHandler()
     
     override init() {
         super.init()
